@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich import box
@@ -15,12 +16,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .alerts import send_test_alert
+from .alerts import send_alerts, send_test_alert
 from .client import DexScreenerClient
 from .config import DEFAULT_CHAINS, ScanFilters
 from .models import HotTokenCandidate, PairSnapshot
 from .scanner import HotScanner
-from .state import ScanPreset, ScanTask, StateStore
+from .state import ScanPreset, ScanTask, StateStore, utc_now_iso
 from .task_runner import execute_task_once, select_due_tasks, task_filters as runner_task_filters
 from .ui import (
     build_header,
@@ -333,6 +334,50 @@ async def _scan(filters: ScanFilters) -> list[HotTokenCandidate]:
         return await scanner.scan(filters)
 
 
+async def _scan_alpha_drops(
+    *,
+    chains: tuple[str, ...],
+    limit: int,
+    max_age_hours: float,
+    min_liquidity_usd: float,
+    min_volume_h24_usd: float,
+    min_txns_h1: int,
+    min_price_change_h1: float,
+    sort_by: str,
+    min_breakout_readiness: float,
+    min_relative_strength: float,
+    decay_filter: bool,
+    min_half_life_minutes: float,
+    min_decay_ratio: float,
+    max_vol_liq_ratio: float,
+) -> list[HotTokenCandidate]:
+    fetch_limit = min(max(limit * 6, 60), 150)
+    filters = ScanFilters(
+        chains=chains,
+        limit=fetch_limit,
+        min_liquidity_usd=min_liquidity_usd,
+        min_volume_h24_usd=min_volume_h24_usd,
+        min_txns_h1=min_txns_h1,
+        min_price_change_h1=min_price_change_h1,
+    )
+    async with DexScreenerClient() as client:
+        scanner = HotScanner(client)
+        raw = await scanner.scan(filters)
+    return _select_new_runners(
+        candidates=raw,
+        max_age_hours=max_age_hours,
+        include_unknown_age=False,
+        sort_by=sort_by,
+        min_breakout_readiness=min_breakout_readiness,
+        min_relative_strength=min_relative_strength,
+        decay_filter=decay_filter,
+        min_half_life_minutes=min_half_life_minutes,
+        min_decay_ratio=min_decay_ratio,
+        max_vol_liq_ratio=max_vol_liq_ratio,
+        limit=limit,
+    )
+
+
 async def _scan_ai_tokens(
     *,
     chain: str,
@@ -422,6 +467,7 @@ async def _scan_new_launches(
     min_liquidity_usd: float,
     min_volume_h24_usd: float,
     min_txns_h1: int,
+    min_txns_h24: int,
 ) -> list[dict[str, object]]:
     chain = chain.lower().strip()
     window_ms = max(days, 1) * 24 * 3600 * 1000
@@ -466,6 +512,8 @@ async def _scan_new_launches(
             continue
         if pair.txns_h1 < min_txns_h1:
             continue
+        if pair.txns_h24 < min_txns_h24:
+            continue
         age_hours = (now_ms - pair.pair_created_at_ms) / 3600000 if pair.pair_created_at_ms else None
         rows.append(
             {
@@ -480,6 +528,7 @@ async def _scan_new_launches(
                 "volumeH24": pair.volume_h24,
                 "liquidityUsd": pair.liquidity_usd,
                 "txnsH1": pair.txns_h1,
+                "txnsH24": pair.txns_h24,
                 "ageHours": age_hours,
                 "dexId": pair.dex_id,
                 "pairUrl": pair.pair_url,
@@ -489,6 +538,7 @@ async def _scan_new_launches(
     rows.sort(
         key=lambda r: (
             _as_float(r.get("volumeH24")),
+            _as_int(r.get("txnsH24")),
             _as_int(r.get("txnsH1")),
             _as_float(r.get("liquidityUsd")),
         ),
@@ -596,6 +646,7 @@ def _render_new_launches_board(
     min_liquidity_usd: float,
     min_volume_h24_usd: float,
     min_txns_h1: int,
+    min_txns_h24: int,
 ) -> None:
     table = Table(
         title=(
@@ -604,7 +655,8 @@ def _render_new_launches_board(
             f"[yellow]window={days}d[/yellow]  "
             f"[green]liq>={fmt_usd(min_liquidity_usd)}[/green]  "
             f"[green]vol24>={fmt_usd(min_volume_h24_usd)}[/green]  "
-            f"[magenta]tx1h>={min_txns_h1}[/magenta]"
+            f"[magenta]tx1h>={min_txns_h1}[/magenta]  "
+            f"[magenta]tx24h>={min_txns_h24}[/magenta]"
         ),
         box=box.ROUNDED,
         header_style="bold bright_white",
@@ -618,6 +670,7 @@ def _render_new_launches_board(
     table.add_column("24h", justify="right")
     table.add_column("24h Vol", justify="right")
     table.add_column("1h Txns", justify="right")
+    table.add_column("24h Txns", justify="right")
     table.add_column("Liquidity", justify="right")
     table.add_column("Dex")
 
@@ -628,6 +681,7 @@ def _render_new_launches_board(
         price = _as_float(row.get("priceUsd"))
         vol24 = _as_float(row.get("volumeH24"))
         tx1h = _as_int(row.get("txnsH1"))
+        tx24h = _as_int(row.get("txnsH24"))
         liq = _as_float(row.get("liquidityUsd"))
         table.add_row(
             str(idx),
@@ -638,12 +692,13 @@ def _render_new_launches_board(
             _pct_text(_as_float(row.get("priceChangeH24"))),
             Text(fmt_usd(vol24), style="bright_cyan" if vol24 >= 100_000 else "cyan"),
             Text(str(tx1h), style="bright_white" if tx1h >= 100 else "white"),
+            Text(str(tx24h), style="bright_white" if tx24h >= 250 else "white"),
             Text(fmt_usd(liq), style="green" if liq >= 50_000 else "yellow" if liq >= 10_000 else "red"),
             str(row.get("dexId", "")),
         )
 
     if not rows:
-        table.add_row("-", "No new coins matched filters", "-", "-", "-", "-", "-", "-", "-", "-")
+        table.add_row("-", "No new coins matched filters", "-", "-", "-", "-", "-", "-", "-", "-", "-")
 
     total_vol = sum(_as_float(r.get("volumeH24")) for r in rows)
     total_liq = sum(_as_float(r.get("liquidityUsd")) for r in rows)
@@ -721,8 +776,12 @@ def _passes_new_runner_quality(
     decay_filter: bool,
     min_half_life_minutes: float,
     min_decay_ratio: float,
+    max_vol_liq_ratio: float,
 ) -> bool:
     analytics = candidate.analytics
+    vol_liq_ratio = candidate.pair.volume_h24 / max(candidate.pair.liquidity_usd, 1.0)
+    if max_vol_liq_ratio > 0 and vol_liq_ratio > max_vol_liq_ratio:
+        return False
     if analytics.breakout_readiness < min_breakout_readiness:
         return False
     if analytics.relative_strength < min_relative_strength:
@@ -749,6 +808,7 @@ def _select_new_runners(
     decay_filter: bool,
     min_half_life_minutes: float,
     min_decay_ratio: float,
+    max_vol_liq_ratio: float,
     limit: int,
 ) -> list[HotTokenCandidate]:
     selected_sort = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "score"
@@ -766,6 +826,7 @@ def _select_new_runners(
             decay_filter=decay_filter,
             min_half_life_minutes=min_half_life_minutes,
             min_decay_ratio=min_decay_ratio,
+            max_vol_liq_ratio=max_vol_liq_ratio,
         ):
             continue
         fresh.append(candidate)
@@ -836,9 +897,10 @@ def top_new(
     chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
     days: Annotated[int, typer.Option(help="Lookback window in days")] = 7,
     limit: Annotated[int, typer.Option(help="Max rows to show")] = 10,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 0.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 0.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
+    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 1_000.0,
     min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 0,
+    min_txns_h24: Annotated[int, typer.Option(help="Minimum 24h transactions")] = 50,
     as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
 ) -> None:
     """Show top new coins by 24h volume for a rolling time window."""
@@ -850,6 +912,7 @@ def top_new(
             min_liquidity_usd=min_liquidity_usd,
             min_volume_h24_usd=min_volume_h24_usd,
             min_txns_h1=min_txns_h1,
+            min_txns_h24=min_txns_h24,
         )
     )
     if as_json:
@@ -862,7 +925,213 @@ def top_new(
         min_liquidity_usd=min_liquidity_usd,
         min_volume_h24_usd=min_volume_h24_usd,
         min_txns_h1=min_txns_h1,
+        min_txns_h24=min_txns_h24,
     )
+
+
+@app.command("alpha-drops")
+def alpha_drops(
+    chains: Annotated[str, typer.Option(help="Comma-separated chain IDs")] = "base,solana",
+    limit: Annotated[int, typer.Option(help="Max rows")] = 15,
+    max_age_hours: Annotated[float, typer.Option(help="Only include pairs newer than this age")] = 6.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 35_000.0,
+    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 90_000.0,
+    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 80,
+    min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
+    sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "readiness",
+    min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 55.0,
+    min_relative_strength: Annotated[float, typer.Option(help="Minimum relative strength vs chain baseline")] = 0.0,
+    decay_filter: Annotated[bool, typer.Option(help="Filter fast-decay momentum profiles")] = True,
+    min_half_life_minutes: Annotated[float, typer.Option(help="Minimum momentum half-life in minutes (if known)")] = 6.0,
+    min_decay_ratio: Annotated[float, typer.Option(help="Minimum momentum decay ratio (if known)")] = 0.35,
+    max_vol_liq_ratio: Annotated[float, typer.Option(help="Maximum 24h volume/liquidity ratio (anti-thin filter)")] = 60.0,
+    as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
+) -> None:
+    """One-shot alpha drop scan across configured chains with quality gates."""
+    scan_chains = _parse_chains(chains)
+    selected_sort = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "readiness"
+    candidates = asyncio.run(
+        _scan_alpha_drops(
+            chains=scan_chains,
+            limit=limit,
+            max_age_hours=max_age_hours,
+            min_liquidity_usd=min_liquidity_usd,
+            min_volume_h24_usd=min_volume_h24_usd,
+            min_txns_h1=min_txns_h1,
+            min_price_change_h1=min_price_change_h1,
+            sort_by=selected_sort,
+            min_breakout_readiness=min_breakout_readiness,
+            min_relative_strength=min_relative_strength,
+            decay_filter=decay_filter,
+            min_half_life_minutes=min_half_life_minutes,
+            min_decay_ratio=min_decay_ratio,
+            max_vol_liq_ratio=max_vol_liq_ratio,
+        )
+    )
+    if as_json:
+        typer.echo(json.dumps([_candidate_json(c) for c in candidates], indent=2, ensure_ascii=True))
+        return
+    console.print(build_header())
+    console.print(
+        render_new_runners_table(
+            candidates,
+            chain=",".join(scan_chains),
+            max_age_hours=max_age_hours,
+            limit=limit,
+        )
+    )
+    console.print(Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]))
+    if len(candidates) < limit:
+        console.print(
+            f"[yellow]Only found {len(candidates)} alpha drops with current gates. "
+            "Lower min-liquidity/min-volume/min-txns or min-breakout-readiness to widen coverage.[/yellow]"
+        )
+
+
+@app.command("alpha-drops-watch")
+def alpha_drops_watch(
+    chains: Annotated[str, typer.Option(help="Comma-separated chain IDs")] = "base,solana",
+    limit: Annotated[int, typer.Option(help="Max rows")] = 15,
+    max_age_hours: Annotated[float, typer.Option(help="Only include pairs newer than this age")] = 6.0,
+    interval: Annotated[float, typer.Option(help="Refresh interval seconds")] = 6.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 35_000.0,
+    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 90_000.0,
+    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 80,
+    min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
+    sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "readiness",
+    min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 55.0,
+    min_relative_strength: Annotated[float, typer.Option(help="Minimum relative strength vs chain baseline")] = 0.0,
+    decay_filter: Annotated[bool, typer.Option(help="Filter fast-decay momentum profiles")] = True,
+    min_half_life_minutes: Annotated[float, typer.Option(help="Minimum momentum half-life in minutes (if known)")] = 6.0,
+    min_decay_ratio: Annotated[float, typer.Option(help="Minimum momentum decay ratio (if known)")] = 0.35,
+    max_vol_liq_ratio: Annotated[float, typer.Option(help="Maximum 24h volume/liquidity ratio (anti-thin filter)")] = 60.0,
+    webhook_url: Annotated[str | None, typer.Option(help="Generic JSON webhook URL")] = None,
+    discord_webhook_url: Annotated[str | None, typer.Option(help="Discord webhook URL")] = None,
+    telegram_bot_token: Annotated[str | None, typer.Option(help="Telegram bot token")] = None,
+    telegram_chat_id: Annotated[str | None, typer.Option(help="Telegram chat id")] = None,
+    alert_min_score: Annotated[float, typer.Option(help="Alert threshold on top score")] = 72.0,
+    alert_cooldown_seconds: Annotated[int, typer.Option(help="Alert cooldown seconds")] = 300,
+    alert_template: Annotated[str | None, typer.Option(help="Alert text template")] = None,
+    alert_top_n: Annotated[int, typer.Option(help="How many top candidates in message")] = 3,
+    alert_min_liquidity_usd: Annotated[float | None, typer.Option(help="Alert gate: minimum liquidity")] = None,
+    alert_max_vol_liq_ratio: Annotated[float | None, typer.Option(help="Alert gate: maximum volume/liquidity ratio")] = None,
+    alert_blocked_terms: Annotated[str | None, typer.Option(help="Alert gate: blocked token terms (comma-separated)")] = None,
+    alert_blocked_chains: Annotated[str | None, typer.Option(help="Alert gate: blocked chains (comma-separated)")] = None,
+    webhook_extra_json: Annotated[str | None, typer.Option(help="Extra webhook JSON object")] = None,
+    alert_max_per_hour: Annotated[int, typer.Option(help="Hard cap on sent alerts per hour (0 disables cap)")] = 8,
+    no_alerts: Annotated[bool, typer.Option(help="Disable alert delivery")] = False,
+    cycles: Annotated[int, typer.Option(help="Stop after N refreshes (0 = infinite)")] = 0,
+    screen: Annotated[bool, typer.Option(help="Use fullscreen alternate buffer")] = True,
+) -> None:
+    """Live alpha-drop scanner with optional realtime notifications."""
+    scan_chains = _parse_chains(chains)
+    selected_sort = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "readiness"
+    try:
+        alerts = _build_alert_config(
+            webhook_url=webhook_url,
+            discord_webhook_url=discord_webhook_url,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            alert_min_score=alert_min_score,
+            alert_cooldown_seconds=alert_cooldown_seconds,
+            alert_template=alert_template,
+            alert_top_n=alert_top_n,
+            alert_min_liquidity_usd=alert_min_liquidity_usd,
+            alert_max_vol_liq_ratio=alert_max_vol_liq_ratio,
+            alert_blocked_terms=alert_blocked_terms,
+            alert_blocked_chains=alert_blocked_chains,
+            webhook_extra_json=webhook_extra_json,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    runtime_task = ScanTask.create(name=f"alpha-drops:{','.join(scan_chains)}", alerts=alerts)
+
+    async def loop() -> None:
+        seen: set[tuple[str, str]] = set()
+        previous_ranks: dict[tuple[str, str], int] = {}
+        sent_alerts: deque[datetime] = deque()
+        cycle = 0
+        status_message = "watching for new alpha drops"
+        with Live(console=console, screen=screen, refresh_per_second=6) as live:
+            while True:
+                cycle += 1
+                candidates = await _scan_alpha_drops(
+                    chains=scan_chains,
+                    limit=limit,
+                    max_age_hours=max_age_hours,
+                    min_liquidity_usd=min_liquidity_usd,
+                    min_volume_h24_usd=min_volume_h24_usd,
+                    min_txns_h1=min_txns_h1,
+                    min_price_change_h1=min_price_change_h1,
+                    sort_by=selected_sort,
+                    min_breakout_readiness=min_breakout_readiness,
+                    min_relative_strength=min_relative_strength,
+                    decay_filter=decay_filter,
+                    min_half_life_minutes=min_half_life_minutes,
+                    min_decay_ratio=min_decay_ratio,
+                    max_vol_liq_ratio=max_vol_liq_ratio,
+                )
+
+                new_events = [c for c in candidates if c.key not in seen]
+                seen.update(c.key for c in candidates)
+
+                if not no_alerts and runtime_task.alerts and new_events:
+                    now = datetime.now(UTC)
+                    while sent_alerts and (now - sent_alerts[0]).total_seconds() >= 3600:
+                        sent_alerts.popleft()
+                    if alert_max_per_hour > 0 and len(sent_alerts) >= alert_max_per_hour:
+                        status_message = (
+                            f"alert cap reached ({alert_max_per_hour}/h), "
+                            f"{len(new_events)} new drops queued visually only"
+                        )
+                    else:
+                        alert_result = await send_alerts(runtime_task, new_events)
+                        if alert_result.get("sent"):
+                            runtime_task.last_alert_at = utc_now_iso()
+                            sent_alerts.append(now)
+                            status_message = f"alerts sent for {len(new_events)} new drops"
+                        else:
+                            status_message = f"alerts not sent: {alert_result.get('reason')}"
+                elif new_events:
+                    status_message = f"{len(new_events)} new alpha drops detected (alerts disabled)"
+                else:
+                    status_message = "no new alpha drops this cycle"
+
+                view = Group(
+                    build_header(),
+                    render_new_runners_table(
+                        candidates,
+                        chain=",".join(scan_chains),
+                        max_age_hours=max_age_hours,
+                        limit=limit,
+                    ),
+                    Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]),
+                    render_rank_movers_table(
+                        candidates,
+                        previous_ranks=previous_ranks,
+                        limit=limit,
+                    ),
+                    Panel(
+                        (
+                            f"refresh={interval:.1f}s | cycle={cycle} | chains={','.join(scan_chains)} | sort={selected_sort}\n"
+                            f"{status_message}\n"
+                            "Ctrl+C to exit"
+                        ),
+                        border_style="dim",
+                        box=box.ROUNDED,
+                    ),
+                )
+                live.update(view)
+                previous_ranks = {candidate.key: idx for idx, candidate in enumerate(candidates, start=1)}
+                if cycles > 0 and cycle >= cycles:
+                    return
+                await asyncio.sleep(interval)
+
+    try:
+        asyncio.run(loop())
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped alpha-drops watch mode.[/dim]")
 
 
 @app.command("new-runners")
@@ -870,7 +1139,7 @@ def new_runners(
     chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
     limit: Annotated[int, typer.Option(help="Number of fresh runners to show")] = 10,
     max_age_hours: Annotated[float, typer.Option(help="Maximum token age in hours")] = 24.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 20_000.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
     min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 50_000.0,
     min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 25,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
@@ -880,6 +1149,7 @@ def new_runners(
     decay_filter: Annotated[bool, typer.Option(help="Filter fast-decay momentum profiles")] = True,
     min_half_life_minutes: Annotated[float, typer.Option(help="Minimum momentum half-life in minutes (if known)")] = 6.0,
     min_decay_ratio: Annotated[float, typer.Option(help="Minimum momentum decay ratio (if known)")] = 0.35,
+    max_vol_liq_ratio: Annotated[float, typer.Option(help="Maximum 24h volume/liquidity ratio (anti-thin filter)")] = 60.0,
     include_unknown_age: Annotated[bool, typer.Option(help="Include tokens with unknown pair age")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
 ) -> None:
@@ -907,6 +1177,7 @@ def new_runners(
         decay_filter=decay_filter,
         min_half_life_minutes=min_half_life_minutes,
         min_decay_ratio=min_decay_ratio,
+        max_vol_liq_ratio=max_vol_liq_ratio,
         limit=limit,
     )
     if as_json:
@@ -944,7 +1215,7 @@ def new_runners_watch(
     limit: Annotated[int, typer.Option(help="Number of fresh runners to show")] = 10,
     max_age_hours: Annotated[float, typer.Option(help="Maximum token age in hours")] = 24.0,
     interval: Annotated[float, typer.Option(help="Refresh interval seconds")] = 7.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 20_000.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
     min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 50_000.0,
     min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 25,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
@@ -954,6 +1225,7 @@ def new_runners_watch(
     decay_filter: Annotated[bool, typer.Option(help="Filter fast-decay momentum profiles")] = True,
     min_half_life_minutes: Annotated[float, typer.Option(help="Minimum momentum half-life in minutes (if known)")] = 6.0,
     min_decay_ratio: Annotated[float, typer.Option(help="Minimum momentum decay ratio (if known)")] = 0.35,
+    max_vol_liq_ratio: Annotated[float, typer.Option(help="Maximum 24h volume/liquidity ratio (anti-thin filter)")] = 60.0,
     include_unknown_age: Annotated[bool, typer.Option(help="Include tokens with unknown pair age")] = False,
     cycles: Annotated[int, typer.Option(help="Stop after N refreshes (0 = infinite)")] = 0,
     screen: Annotated[bool, typer.Option(help="Use fullscreen alternate buffer")] = True,
@@ -1018,6 +1290,7 @@ def new_runners_watch(
                         decay_filter=decay_filter,
                         min_half_life_minutes=min_half_life_minutes,
                         min_decay_ratio=min_decay_ratio,
+                        max_vol_liq_ratio=max_vol_liq_ratio,
                         limit=limit,
                     )
                     controller.clamp_selection(row_count=len(ranked))
