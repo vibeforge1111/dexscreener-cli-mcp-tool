@@ -65,6 +65,16 @@ Top AI tokens on Base (color leaderboard):
 ds ai-top --chain base --limit 10
 ```
 
+Top new coins by 24h volume in the last 7 days:
+```bash
+ds top-new --chain base --days 7 --limit 10
+```
+
+Stricter new-coin leaderboard (more tradable):
+```bash
+ds top-new --chain base --days 7 --limit 10 --min-liquidity-usd 10000 --min-volume-h24-usd 1000 --min-txns-h1 1
+```
+
 Stricter tradable AI leaderboard:
 ```bash
 ds ai-top --chain base --limit 10 --min-liquidity-usd 25000 --min-volume-h24-usd 10000 --min-txns-h1 5
