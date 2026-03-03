@@ -1,6 +1,6 @@
 # dexscreener-cli-mcp-tool
 
-Visual terminal scanner + MCP server for Dexscreener signals.
+Visual terminal scanner + MCP server for Dexscreener signals, with local presets and task workflows.
 
 ## Why this exists
 Dexscreener is mostly used for:
@@ -18,7 +18,12 @@ This tool replicates that flow in terminal form with chain filters, scoring, and
 2. Expands each token into tradable pair data via:
    - `/token-pairs/v1/{chainId}/{tokenAddress}`
 3. Scores candidates by volume, activity, liquidity, momentum, and flow pressure.
-4. Renders a clean board in terminal and exposes same scan as MCP tools.
+4. Renders a clean board in terminal with:
+   - leaderboard
+   - chain heat summary
+   - flow/risk summary
+5. Supports named presets and reusable scan tasks.
+6. Exposes same scan + task flows as MCP tools.
 
 ## Important API constraints
 Dexscreener official limits:
@@ -33,6 +38,12 @@ This project includes:
 ## Holder distribution note
 Public Dexscreener API does not expose direct holder breakdown data.  
 This tool shows **proxy concentration signals** (liquidity-to-market-cap, volume-to-liquidity, buy/sell imbalance) and labels them clearly as heuristic.
+
+## Product docs
+1. [PRD](docs/PRD.md)
+2. [System Architecture](docs/SYSTEM_ARCHITECTURE.md)
+3. [UI/UX Spec](docs/UI_UX_SPEC.md)
+4. [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
 
 ## Install
 ```bash
@@ -78,6 +89,27 @@ Machine output:
 ds hot --json
 ```
 
+Use a preset:
+```bash
+ds hot --preset fast-sol
+```
+
+Preset lifecycle:
+```bash
+ds preset save fast-sol --chains solana,base --limit 8 --min-liquidity-usd 25000 --min-volume-h24-usd 70000 --min-txns-h1 40
+ds preset list
+ds preset show fast-sol
+```
+
+Task lifecycle:
+```bash
+ds task create scout-sol --preset fast-sol --notes "baseline runner scan"
+ds task list
+ds task run scout-sol
+ds task status scout-sol running
+ds task status scout-sol done
+```
+
 ## MCP usage
 Run MCP server on stdio:
 ```bash
@@ -88,6 +120,11 @@ Exposed tools:
 1. `scan_hot_tokens`
 2. `search_pairs`
 3. `inspect_token`
+4. `save_preset`
+5. `list_presets`
+6. `create_task`
+7. `list_tasks`
+8. `run_task_scan`
 
 ## Recommended default profile
 For spotting new runners with manageable noise:
