@@ -3,7 +3,7 @@
 Status key: `pending` | `in_progress` | `done`
 
 ## 1) Signal Quality - Early Runner Detection
-- Status: `in_progress`
+- Status: `done`
 - Scope:
   - Add volatility compression metric.
   - Add breakout readiness score.
@@ -13,7 +13,7 @@ Status key: `pending` | `in_progress` | `done`
   - Scanner tags include at least one early-signal tag when criteria match.
 
 ## 2) Signal Quality - Relative Strength
-- Status: `pending`
+- Status: `done`
 - Scope:
   - Compute chain baseline for 1h momentum and flow.
   - Add per-token relative strength vs chain baseline.
@@ -22,7 +22,7 @@ Status key: `pending` | `in_progress` | `done`
   - Rank/sort can prioritize RS.
 
 ## 3) Risk Control - Momentum Half-Life and Decay Filter
-- Status: `pending`
+- Status: `done`
 - Scope:
   - Track per-token momentum history during watch loops.
   - Estimate momentum half-life.
@@ -32,7 +32,7 @@ Status key: `pending` | `in_progress` | `done`
   - Filter reason visible in tags/board hints.
 
 ## 4) Watch UX - Keyboard Interactions
-- Status: `pending`
+- Status: `done`
 - Scope:
   - Chain switching hotkeys (`1-9`).
   - Sort mode toggle (`s`).
@@ -42,7 +42,7 @@ Status key: `pending` | `in_progress` | `done`
   - At least one interactive session demonstrates chain switch and sort mode updates.
 
 ## 5) Docs and Validation
-- Status: `pending`
+- Status: `done`
 - Scope:
   - README updates with new options/hotkeys.
   - Live command verification for `new-runners` and `new-runners-watch`.

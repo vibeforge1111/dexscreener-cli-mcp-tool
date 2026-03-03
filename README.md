@@ -65,10 +65,35 @@ Best 10 new runners of the day on Base:
 ds new-runners --chain base --limit 10 --max-age-hours 24
 ```
 
+Higher-signal profile (quality gates + sort by readiness):
+```bash
+ds new-runners \
+  --chain base \
+  --limit 10 \
+  --max-age-hours 24 \
+  --sort-by readiness \
+  --min-breakout-readiness 55 \
+  --min-relative-strength -10 \
+  --decay-filter \
+  --min-half-life-minutes 6 \
+  --min-decay-ratio 0.35
+```
+
 Live new-runner rotation board (cards + rank movers):
 ```bash
 ds new-runners-watch --chain base --limit 10 --max-age-hours 24 --interval 6
 ```
+
+Multi-chain live board with keyboard controls:
+```bash
+ds new-runners-watch --chain base --watch-chains base,solana,ethereum --limit 10 --interval 6
+```
+
+Watch hotkeys:
+1. `1-9` switch active chain from `--watch-chains`
+2. `s` cycle sort mode (`score`, `readiness`, `rs`, `volume`, `momentum`)
+3. `j` / `k` change selected row
+4. `c` copy selected token/pair/url to clipboard
 
 Live watch board:
 ```bash
