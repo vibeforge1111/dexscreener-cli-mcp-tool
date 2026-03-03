@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -12,11 +13,12 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
+from .alerts import send_alerts
 from .client import DexScreenerClient
 from .config import DEFAULT_CHAINS, ScanFilters
 from .models import HotTokenCandidate
 from .scanner import HotScanner
-from .state import ScanPreset, StateStore
+from .state import ScanPreset, ScanTask, StateStore
 from .ui import (
     build_header,
     render_chain_heat_table,
@@ -112,15 +114,17 @@ def _task_filters(task_name_or_id: str) -> tuple[ScanFilters, str]:
         console.print(f"[red]Task '{task_name_or_id}' not found.[/red]")
         raise typer.Exit(code=1)
 
+    return _filters_for_task(task, store), task.id
+
+
+def _filters_for_task(task: ScanTask, store: StateStore) -> ScanFilters:
     filters = ScanFilters(chains=DEFAULT_CHAINS)
-    source = "defaults"
     if task.preset:
         preset = store.get_preset(task.preset)
         if not preset:
             console.print(f"[red]Task preset '{task.preset}' not found.[/red]")
             raise typer.Exit(code=1)
         filters = preset.to_filters()
-        source = f"preset:{preset.name}"
 
     if task.filters:
         payload = task.filters
@@ -136,15 +140,89 @@ def _task_filters(task_name_or_id: str) -> tuple[ScanFilters, str]:
             filters.min_txns_h1 = int(payload["min_txns_h1"])
         if payload.get("min_price_change_h1") is not None:
             filters.min_price_change_h1 = float(payload["min_price_change_h1"])
-        source += "+overrides"
+    return filters
 
-    return filters, task.id
+
+def _build_task_overrides(
+    *,
+    chains: str | None,
+    limit: int | None,
+    min_liquidity_usd: float | None,
+    min_volume_h24_usd: float | None,
+    min_txns_h1: int | None,
+    min_price_change_h1: float | None,
+    from_existing: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    overrides: dict[str, object] = dict(from_existing or {})
+    if chains is not None:
+        overrides["chains"] = list(_parse_chains(chains))
+    if limit is not None:
+        overrides["limit"] = limit
+    if min_liquidity_usd is not None:
+        overrides["min_liquidity_usd"] = min_liquidity_usd
+    if min_volume_h24_usd is not None:
+        overrides["min_volume_h24_usd"] = min_volume_h24_usd
+    if min_txns_h1 is not None:
+        overrides["min_txns_h1"] = min_txns_h1
+    if min_price_change_h1 is not None:
+        overrides["min_price_change_h1"] = min_price_change_h1
+    return overrides or None
+
+
+def _build_alert_config(
+    *,
+    webhook_url: str | None,
+    discord_webhook_url: str | None,
+    telegram_bot_token: str | None,
+    telegram_chat_id: str | None,
+    alert_min_score: float | None,
+    alert_cooldown_seconds: int | None,
+    from_existing: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    alerts: dict[str, object] = dict(from_existing or {})
+    if webhook_url is not None:
+        alerts["webhook_url"] = webhook_url
+    if discord_webhook_url is not None:
+        alerts["discord_webhook_url"] = discord_webhook_url
+    if telegram_bot_token is not None:
+        alerts["telegram_bot_token"] = telegram_bot_token
+    if telegram_chat_id is not None:
+        alerts["telegram_chat_id"] = telegram_chat_id
+    if alert_min_score is not None:
+        alerts["min_score"] = alert_min_score
+    if alert_cooldown_seconds is not None:
+        alerts["cooldown_seconds"] = alert_cooldown_seconds
+    return alerts or None
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
 
 
 async def _scan(filters: ScanFilters) -> list[HotTokenCandidate]:
     async with DexScreenerClient() as client:
         scanner = HotScanner(client)
         return await scanner.scan(filters)
+
+
+def _render_scan_board(candidates: list[HotTokenCandidate], filters: ScanFilters) -> None:
+    console.print(build_header())
+    console.print(
+        render_hot_table(
+            candidates,
+            chains=filters.chains,
+            limit=filters.limit,
+            min_liquidity_usd=filters.min_liquidity_usd,
+            min_volume_h24_usd=filters.min_volume_h24_usd,
+            min_txns_h1=filters.min_txns_h1,
+        )
+    )
+    console.print(Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]))
 
 
 @app.command("hot")
@@ -172,19 +250,7 @@ def hot(
     if as_json:
         typer.echo(json.dumps([_candidate_json(c) for c in candidates], indent=2, ensure_ascii=True))
         return
-
-    console.print(build_header())
-    console.print(
-        render_hot_table(
-            candidates,
-            chains=filters.chains,
-            limit=filters.limit,
-            min_liquidity_usd=filters.min_liquidity_usd,
-            min_volume_h24_usd=filters.min_volume_h24_usd,
-            min_txns_h1=filters.min_txns_h1,
-        )
-    )
-    console.print(Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]))
+    _render_scan_board(candidates, filters)
 
 
 @app.command("watch")
@@ -430,6 +496,13 @@ def task_create(
     min_volume_h24_usd: Annotated[float | None, typer.Option(help="Inline min volume override")] = None,
     min_txns_h1: Annotated[int | None, typer.Option(help="Inline min txns override")] = None,
     min_price_change_h1: Annotated[float | None, typer.Option(help="Inline min 1h % override")] = None,
+    interval_seconds: Annotated[int | None, typer.Option(help="Run interval seconds for daemon mode")] = None,
+    webhook_url: Annotated[str | None, typer.Option(help="Generic JSON webhook URL")] = None,
+    discord_webhook_url: Annotated[str | None, typer.Option(help="Discord webhook URL")] = None,
+    telegram_bot_token: Annotated[str | None, typer.Option(help="Telegram bot token")] = None,
+    telegram_chat_id: Annotated[str | None, typer.Option(help="Telegram chat id")] = None,
+    alert_min_score: Annotated[float | None, typer.Option(help="Alert threshold on top score")] = None,
+    alert_cooldown_seconds: Annotated[int | None, typer.Option(help="Alert cooldown seconds")] = None,
     notes: Annotated[str, typer.Option(help="Task notes")] = "",
 ) -> None:
     """Create a new scan task."""
@@ -438,25 +511,30 @@ def task_create(
         console.print(f"[red]Preset '{preset}' not found.[/red]")
         raise typer.Exit(code=1)
 
-    overrides: dict[str, object] = {}
-    if chains:
-        overrides["chains"] = list(_parse_chains(chains))
-    if limit is not None:
-        overrides["limit"] = limit
-    if min_liquidity_usd is not None:
-        overrides["min_liquidity_usd"] = min_liquidity_usd
-    if min_volume_h24_usd is not None:
-        overrides["min_volume_h24_usd"] = min_volume_h24_usd
-    if min_txns_h1 is not None:
-        overrides["min_txns_h1"] = min_txns_h1
-    if min_price_change_h1 is not None:
-        overrides["min_price_change_h1"] = min_price_change_h1
+    overrides = _build_task_overrides(
+        chains=chains,
+        limit=limit,
+        min_liquidity_usd=min_liquidity_usd,
+        min_volume_h24_usd=min_volume_h24_usd,
+        min_txns_h1=min_txns_h1,
+        min_price_change_h1=min_price_change_h1,
+    )
+    alerts = _build_alert_config(
+        webhook_url=webhook_url,
+        discord_webhook_url=discord_webhook_url,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        alert_min_score=alert_min_score,
+        alert_cooldown_seconds=alert_cooldown_seconds,
+    )
 
     try:
         task = store.create_task(
             name=name,
             preset=preset,
-            filters=overrides or None,
+            filters=overrides,
+            interval_seconds=interval_seconds,
+            alerts=alerts,
             notes=notes,
         )
     except ValueError as exc:
@@ -483,7 +561,10 @@ def task_list(
     table.add_column("Name")
     table.add_column("Status")
     table.add_column("Preset")
+    table.add_column("Interval", justify="right")
+    table.add_column("Alerts")
     table.add_column("Last Run")
+    table.add_column("Last Alert")
     table.add_column("Updated", style="dim")
     for task in tasks:
         table.add_row(
@@ -491,7 +572,10 @@ def task_list(
             task.name,
             task.status,
             task.preset or "-",
+            str(task.interval_seconds) if task.interval_seconds else "-",
+            "yes" if task.alerts else "no",
             task.last_run_at or "-",
+            task.last_alert_at or "-",
             task.updated_at,
         )
     console.print(table)
@@ -537,32 +621,188 @@ def task_delete(task: Annotated[str, typer.Argument(help="Task id or name")]) ->
     console.print(f"[green]Deleted task '{task}'.[/green]")
 
 
+@task_app.command("configure")
+def task_configure(
+    task: Annotated[str, typer.Argument(help="Task id or name")],
+    preset: Annotated[str | None, typer.Option(help="Set preset name")] = None,
+    clear_preset: Annotated[bool, typer.Option(help="Remove preset from task")] = False,
+    chains: Annotated[str | None, typer.Option(help="Inline chain override")] = None,
+    limit: Annotated[int | None, typer.Option(help="Inline limit override")] = None,
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Inline min liquidity override")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Inline min volume override")] = None,
+    min_txns_h1: Annotated[int | None, typer.Option(help="Inline min txns override")] = None,
+    min_price_change_h1: Annotated[float | None, typer.Option(help="Inline min 1h %% override")] = None,
+    clear_overrides: Annotated[bool, typer.Option(help="Clear inline filter overrides")] = False,
+    interval_seconds: Annotated[int | None, typer.Option(help="Run interval seconds for daemon mode")] = None,
+    clear_interval: Annotated[bool, typer.Option(help="Clear daemon interval")] = False,
+    webhook_url: Annotated[str | None, typer.Option(help="Generic JSON webhook URL")] = None,
+    discord_webhook_url: Annotated[str | None, typer.Option(help="Discord webhook URL")] = None,
+    telegram_bot_token: Annotated[str | None, typer.Option(help="Telegram bot token")] = None,
+    telegram_chat_id: Annotated[str | None, typer.Option(help="Telegram chat id")] = None,
+    alert_min_score: Annotated[float | None, typer.Option(help="Alert threshold on top score")] = None,
+    alert_cooldown_seconds: Annotated[int | None, typer.Option(help="Alert cooldown seconds")] = None,
+    clear_alerts: Annotated[bool, typer.Option(help="Remove all alerts from task")] = False,
+    notes: Annotated[str | None, typer.Option(help="Replace task notes")] = None,
+) -> None:
+    """Configure a task's schedule, overrides, and alert channels."""
+    store = StateStore()
+    current = store.get_task(task)
+    if not current:
+        console.print(f"[red]Task '{task}' not found.[/red]")
+        raise typer.Exit(code=1)
+    if preset and not store.get_preset(preset):
+        console.print(f"[red]Preset '{preset}' not found.[/red]")
+        raise typer.Exit(code=1)
+
+    next_preset = None if clear_preset else (preset if preset is not None else current.preset)
+    current_overrides = None if clear_overrides else current.filters
+    next_overrides = _build_task_overrides(
+        chains=chains,
+        limit=limit,
+        min_liquidity_usd=min_liquidity_usd,
+        min_volume_h24_usd=min_volume_h24_usd,
+        min_txns_h1=min_txns_h1,
+        min_price_change_h1=min_price_change_h1,
+        from_existing=current_overrides,
+    )
+    next_interval = None if clear_interval else (interval_seconds if interval_seconds is not None else current.interval_seconds)
+    current_alerts = None if clear_alerts else current.alerts
+    next_alerts = _build_alert_config(
+        webhook_url=webhook_url,
+        discord_webhook_url=discord_webhook_url,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        alert_min_score=alert_min_score,
+        alert_cooldown_seconds=alert_cooldown_seconds,
+        from_existing=current_alerts,
+    )
+
+    try:
+        updated = store.update_task(
+            current.id,
+            preset=next_preset,
+            filters=next_overrides,
+            interval_seconds=next_interval,
+            alerts=next_alerts,
+            notes=notes if notes is not None else current.notes,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]Updated task '{updated.name}'.[/green]")
+
+
 @task_app.command("run")
 def task_run(
     task: Annotated[str, typer.Argument(help="Task id or name")],
+    no_alerts: Annotated[bool, typer.Option(help="Skip alert delivery for this run")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
 ) -> None:
     """Execute a task scan now."""
-    filters, task_id = _task_filters(task)
-    candidates = asyncio.run(_scan(filters))
     store = StateStore()
-    store.touch_task_run(task_id)
+    row = store.get_task(task)
+    if not row:
+        console.print(f"[red]Task '{task}' not found.[/red]")
+        raise typer.Exit(code=1)
+    filters = _filters_for_task(row, store)
+    candidates = asyncio.run(_scan(filters))
+    store.touch_task_run(row.id)
+    alert_result = {"sent": False, "reason": "disabled", "channels": {}}
+    if not no_alerts:
+        refreshed = store.get_task(row.id) or row
+        alert_result = asyncio.run(send_alerts(refreshed, candidates))
+        if alert_result.get("sent"):
+            store.touch_task_alert(row.id)
 
     if as_json:
-        typer.echo(json.dumps([_candidate_json(c) for c in candidates], indent=2, ensure_ascii=True))
-        return
-    console.print(build_header())
-    console.print(
-        render_hot_table(
-            candidates,
-            chains=filters.chains,
-            limit=filters.limit,
-            min_liquidity_usd=filters.min_liquidity_usd,
-            min_volume_h24_usd=filters.min_volume_h24_usd,
-            min_txns_h1=filters.min_txns_h1,
+        typer.echo(
+            json.dumps(
+                {
+                    "task": row.to_dict(),
+                    "results": [_candidate_json(c) for c in candidates],
+                    "alert": alert_result,
+                },
+                indent=2,
+                ensure_ascii=True,
+            )
         )
-    )
-    console.print(Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]))
+        return
+    _render_scan_board(candidates, filters)
+    if alert_result.get("sent"):
+        console.print(f"[green]Alerts sent: {json.dumps(alert_result['channels'])}[/green]")
+    else:
+        console.print(f"[dim]Alerts: {alert_result.get('reason')}[/dim]")
+
+
+@task_app.command("daemon")
+def task_daemon(
+    task: Annotated[str | None, typer.Option(help="Run only this task id/name")] = None,
+    all_tasks: Annotated[bool, typer.Option("--all", help="Run all non-blocked tasks")] = False,
+    poll_seconds: Annotated[float, typer.Option(help="Scheduler polling interval seconds")] = 5.0,
+    default_interval_seconds: Annotated[int, typer.Option(help="Default interval for tasks without one")] = 120,
+    once: Annotated[bool, typer.Option(help="Run one due cycle and exit")] = False,
+    no_alerts: Annotated[bool, typer.Option(help="Disable alert delivery in daemon runs")] = False,
+) -> None:
+    """Continuously execute due scan tasks on a schedule."""
+    if not task and not all_tasks:
+        console.print("[red]Provide --task <id|name> or --all.[/red]")
+        raise typer.Exit(code=1)
+
+    async def loop() -> None:
+        async with DexScreenerClient() as client:
+            scanner = HotScanner(client)
+            cycle = 0
+            while True:
+                cycle += 1
+                now = datetime.now(UTC)
+                store = StateStore()
+                all_rows = store.list_tasks()
+                if task:
+                    all_rows = [t for t in all_rows if t.id.lower() == task.lower() or t.name.lower() == task.lower()]
+                if all_tasks:
+                    all_rows = [t for t in all_rows if t.status != "blocked"]
+                due_rows: list[ScanTask] = []
+                for row in all_rows:
+                    if row.status in {"blocked", "done"}:
+                        continue
+                    interval = row.interval_seconds or default_interval_seconds
+                    last_run = _parse_iso(row.last_run_at)
+                    due = (last_run is None) or ((now - last_run).total_seconds() >= interval)
+                    if due:
+                        due_rows.append(row)
+
+                if not due_rows:
+                    console.print(f"[dim]Cycle {cycle}: no due tasks.[/dim]")
+                for row in due_rows:
+                    store.update_task_status(row.id, status="running")
+                    try:
+                        filters = _filters_for_task(row, store)
+                        candidates = await scanner.scan(filters)
+                        store.touch_task_run(row.id)
+                        alert_result = {"sent": False, "reason": "disabled"}
+                        if not no_alerts:
+                            latest = store.get_task(row.id) or row
+                            alert_result = await send_alerts(latest, candidates)
+                            if alert_result.get("sent"):
+                                store.touch_task_alert(row.id)
+                        store.update_task_status(row.id, status="todo")
+                        top = candidates[0].pair.base_symbol if candidates else "none"
+                        console.print(
+                            f"[cyan]task={row.name}[/cyan] results={len(candidates)} top={top} "
+                            f"alerts={alert_result.get('reason')}"
+                        )
+                    except Exception as exc:
+                        store.update_task_status(row.id, status="blocked")
+                        console.print(f"[red]task={row.name} failed and was blocked: {exc}[/red]")
+
+                if once:
+                    return
+                await asyncio.sleep(poll_seconds)
+
+    try:
+        asyncio.run(loop())
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped task daemon.[/dim]")
 
 
 if __name__ == "__main__":
