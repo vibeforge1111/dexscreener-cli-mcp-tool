@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Annotated
@@ -17,7 +18,7 @@ from rich.text import Text
 from .alerts import send_test_alert
 from .client import DexScreenerClient
 from .config import DEFAULT_CHAINS, ScanFilters
-from .models import HotTokenCandidate
+from .models import HotTokenCandidate, PairSnapshot
 from .scanner import HotScanner
 from .state import ScanPreset, ScanTask, StateStore
 from .task_runner import execute_task_once, select_due_tasks, task_filters as runner_task_filters
@@ -67,6 +68,40 @@ AI_KEYWORDS: tuple[str, ...] = (
     "inference",
     "virtual",
     "aixbt",
+)
+NEW_TOKEN_SEARCH_QUERIES: tuple[str, ...] = (
+    "new",
+    "launch",
+    "launched",
+    "base",
+    "coin",
+    "token",
+    "meme",
+    "pump",
+    "moon",
+    "cat",
+    "dog",
+    "pepe",
+    "inu",
+    "ai",
+    "agent",
+    "gpt",
+    "eth",
+    "sol",
+    "alpha",
+    "beta",
+    "gem",
+    "degen",
+    "official",
+    "2026",
+    "2025",
+    "x",
+    "z",
+    "a",
+    "e",
+    "i",
+    "o",
+    "u",
 )
 
 
@@ -373,6 +408,89 @@ async def _scan_ai_tokens(
     return rows[:limit]
 
 
+async def _scan_new_launches(
+    *,
+    chain: str,
+    days: int,
+    limit: int,
+    min_liquidity_usd: float,
+    min_volume_h24_usd: float,
+    min_txns_h1: int,
+) -> list[dict[str, object]]:
+    chain = chain.lower().strip()
+    window_ms = max(days, 1) * 24 * 3600 * 1000
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    cutoff_ms = now_ms - window_ms
+
+    all_rows: list[dict[str, object]] = []
+    async with DexScreenerClient() as client:
+        for query in NEW_TOKEN_SEARCH_QUERIES:
+            try:
+                rows = await client.search_pairs(query)
+            except Exception:
+                continue
+            all_rows.extend(rows)
+
+    pair_dedup: dict[str, PairSnapshot] = {}
+    for row in all_rows:
+        if str(row.get("chainId", "")).lower() != chain:
+            continue
+        pair = PairSnapshot.from_api(row)
+        if pair.pair_created_at_ms is None:
+            continue
+        if pair.pair_created_at_ms < cutoff_ms:
+            continue
+        key = pair.pair_address.lower()
+        prev = pair_dedup.get(key)
+        if prev is None or pair.volume_h24 > prev.volume_h24:
+            pair_dedup[key] = pair
+
+    token_dedup: dict[str, PairSnapshot] = {}
+    for pair in pair_dedup.values():
+        token_key = pair.base_address.lower()
+        prev = token_dedup.get(token_key)
+        if prev is None or pair.volume_h24 > prev.volume_h24:
+            token_dedup[token_key] = pair
+
+    rows: list[dict[str, object]] = []
+    for pair in token_dedup.values():
+        if pair.volume_h24 < min_volume_h24_usd:
+            continue
+        if pair.liquidity_usd < min_liquidity_usd:
+            continue
+        if pair.txns_h1 < min_txns_h1:
+            continue
+        age_hours = (now_ms - pair.pair_created_at_ms) / 3600000 if pair.pair_created_at_ms else None
+        rows.append(
+            {
+                "chainId": chain,
+                "symbol": pair.base_symbol,
+                "name": pair.base_name,
+                "tokenAddress": pair.base_address,
+                "pairAddress": pair.pair_address,
+                "priceUsd": pair.price_usd,
+                "priceChangeH1": pair.price_change_h1,
+                "priceChangeH24": pair.price_change_h24,
+                "volumeH24": pair.volume_h24,
+                "liquidityUsd": pair.liquidity_usd,
+                "txnsH1": pair.txns_h1,
+                "ageHours": age_hours,
+                "dexId": pair.dex_id,
+                "pairUrl": pair.pair_url,
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (
+            _as_float(r.get("volumeH24")),
+            _as_int(r.get("txnsH1")),
+            _as_float(r.get("liquidityUsd")),
+        ),
+        reverse=True,
+    )
+    return rows[:limit]
+
+
 def _render_scan_board(candidates: list[HotTokenCandidate], filters: ScanFilters) -> None:
     console.print(build_header())
     console.print(
@@ -456,6 +574,82 @@ def _render_ai_board(
             f"Average 1h move: {fmt_pct(avg_h1)}"
         ),
         title="[bold bright_white]AI Market Snapshot[/bold bright_white]",
+        border_style="bright_blue",
+        box=box.ROUNDED,
+    )
+    console.print(build_header())
+    console.print(table)
+    console.print(summary)
+
+
+def _render_new_launches_board(
+    *,
+    chain: str,
+    days: int,
+    rows: list[dict[str, object]],
+    min_liquidity_usd: float,
+    min_volume_h24_usd: float,
+    min_txns_h1: int,
+) -> None:
+    table = Table(
+        title=(
+            f"[bold bright_white]Top New Coins[/bold bright_white]  "
+            f"[cyan]chain={chain}[/cyan]  "
+            f"[yellow]window={days}d[/yellow]  "
+            f"[green]liq>={fmt_usd(min_liquidity_usd)}[/green]  "
+            f"[green]vol24>={fmt_usd(min_volume_h24_usd)}[/green]  "
+            f"[magenta]tx1h>={min_txns_h1}[/magenta]"
+        ),
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("#", justify="right")
+    table.add_column("Token", style="bold yellow")
+    table.add_column("Age", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("1h", justify="right")
+    table.add_column("24h", justify="right")
+    table.add_column("24h Vol", justify="right")
+    table.add_column("1h Txns", justify="right")
+    table.add_column("Liquidity", justify="right")
+    table.add_column("Dex")
+
+    for idx, row in enumerate(rows, start=1):
+        symbol = str(row.get("symbol", "?"))
+        age_hours = _as_float(row.get("ageHours"), 0.0)
+        age_style = "bright_cyan" if age_hours <= 24 else "yellow" if age_hours <= 72 else "white"
+        price = _as_float(row.get("priceUsd"))
+        vol24 = _as_float(row.get("volumeH24"))
+        tx1h = _as_int(row.get("txnsH1"))
+        liq = _as_float(row.get("liquidityUsd"))
+        table.add_row(
+            str(idx),
+            symbol,
+            Text(f"{age_hours:.1f}h", style=age_style),
+            Text(f"${price:,.8f}" if price < 0.01 else f"${price:,.6f}", style="white"),
+            _pct_text(_as_float(row.get("priceChangeH1"))),
+            _pct_text(_as_float(row.get("priceChangeH24"))),
+            Text(fmt_usd(vol24), style="bright_cyan" if vol24 >= 100_000 else "cyan"),
+            Text(str(tx1h), style="bright_white" if tx1h >= 100 else "white"),
+            Text(fmt_usd(liq), style="green" if liq >= 50_000 else "yellow" if liq >= 10_000 else "red"),
+            str(row.get("dexId", "")),
+        )
+
+    if not rows:
+        table.add_row("-", "No new coins matched filters", "-", "-", "-", "-", "-", "-", "-", "-")
+
+    total_vol = sum(_as_float(r.get("volumeH24")) for r in rows)
+    total_liq = sum(_as_float(r.get("liquidityUsd")) for r in rows)
+    avg_age = sum(_as_float(r.get("ageHours")) for r in rows) / len(rows) if rows else 0.0
+    summary = Panel(
+        Text(
+            f"Rows: {len(rows)}\n"
+            f"24h volume sum: {fmt_usd(total_vol)}\n"
+            f"Liquidity sum: {fmt_usd(total_liq)}\n"
+            f"Average age: {avg_age:.1f}h"
+        ),
+        title="[bold bright_white]New Coin Snapshot[/bold bright_white]",
         border_style="bright_blue",
         box=box.ROUNDED,
     )
@@ -624,6 +818,40 @@ def ai_top(
         return
     _render_ai_board(
         chain=chain.lower().strip(),
+        rows=rows,
+        min_liquidity_usd=min_liquidity_usd,
+        min_volume_h24_usd=min_volume_h24_usd,
+        min_txns_h1=min_txns_h1,
+    )
+
+
+@app.command("top-new")
+def top_new(
+    chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
+    days: Annotated[int, typer.Option(help="Lookback window in days")] = 7,
+    limit: Annotated[int, typer.Option(help="Max rows to show")] = 10,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 0.0,
+    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 0.0,
+    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
+) -> None:
+    """Show top new coins by 24h volume for a rolling time window."""
+    rows = asyncio.run(
+        _scan_new_launches(
+            chain=chain,
+            days=days,
+            limit=limit,
+            min_liquidity_usd=min_liquidity_usd,
+            min_volume_h24_usd=min_volume_h24_usd,
+            min_txns_h1=min_txns_h1,
+        )
+    )
+    if as_json:
+        typer.echo(_ai_rows_json(rows))
+        return
+    _render_new_launches_board(
+        chain=chain.lower().strip(),
+        days=max(days, 1),
         rows=rows,
         min_liquidity_usd=min_liquidity_usd,
         min_volume_h24_usd=min_volume_h24_usd,
