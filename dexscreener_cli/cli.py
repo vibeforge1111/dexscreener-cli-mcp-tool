@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich import box
 from rich.columns import Columns
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .alerts import send_test_alert
 from .client import DexScreenerClient
@@ -40,6 +42,22 @@ app.add_typer(preset_app, name="preset")
 app.add_typer(task_app, name="task")
 app.add_typer(state_app, name="state")
 console = Console()
+
+
+def _status_badge(status: str) -> Text:
+    style_map = {
+        "todo": "bold yellow",
+        "running": "bold bright_cyan",
+        "done": "bold bright_green",
+        "blocked": "bold bright_red",
+        "ok": "bold bright_green",
+        "error": "bold bright_red",
+    }
+    return Text(status, style=style_map.get(status, "white"))
+
+
+def _alert_badge(enabled: bool) -> Text:
+    return Text("yes", style="bold bright_green") if enabled else Text("no", style="dim")
 
 
 def _parse_chains(raw: str) -> tuple[str, ...]:
@@ -438,7 +456,12 @@ def preset_list() -> None:
     if not presets:
         console.print("[yellow]No presets found.[/yellow]")
         return
-    table = Table(title="Presets")
+    table = Table(
+        title="[bold bright_white]Presets[/bold bright_white]",
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
     table.add_column("Name", style="bold cyan")
     table.add_column("Chains")
     table.add_column("Limit", justify="right")
@@ -569,7 +592,12 @@ def task_list(
     if not tasks:
         console.print("[yellow]No tasks found.[/yellow]")
         return
-    table = Table(title="Scan Tasks")
+    table = Table(
+        title="[bold bright_white]Scan Tasks[/bold bright_white]",
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
     table.add_column("ID", style="bold cyan")
     table.add_column("Name")
     table.add_column("Status")
@@ -583,13 +611,13 @@ def task_list(
         table.add_row(
             task.id,
             task.name,
-            task.status,
+            _status_badge(task.status),
             task.preset or "-",
             str(task.interval_seconds) if task.interval_seconds else "-",
-            "yes" if task.alerts else "no",
-            task.last_run_at or "-",
-            task.last_alert_at or "-",
-            task.updated_at,
+            _alert_badge(bool(task.alerts)),
+            Text(task.last_run_at or "-", style="dim"),
+            Text(task.last_alert_at or "-", style="dim"),
+            Text(task.updated_at, style="dim"),
         )
     console.print(table)
 
@@ -897,7 +925,12 @@ def task_runs(
     if not rows:
         console.print("[yellow]No run history found.[/yellow]")
         return
-    table = Table(title="Task Run History")
+    table = Table(
+        title="[bold bright_white]Task Run History[/bold bright_white]",
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
     table.add_column("Finished", style="dim")
     table.add_column("Task")
     table.add_column("Mode")
@@ -912,11 +945,11 @@ def task_runs(
             r.finished_at,
             r.task_name,
             r.mode,
-            r.status,
+            _status_badge(r.status),
             str(r.result_count),
             f"{r.top_chain}:{r.top_token}" if r.top_token else "-",
             f"{r.top_score:.2f}" if r.top_score is not None else "-",
-            r.alert_reason,
+            Text(r.alert_reason, style="yellow" if r.alert_reason != "sent" else "green"),
             str(r.duration_ms),
         )
     console.print(table)
