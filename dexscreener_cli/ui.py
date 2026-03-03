@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from collections import defaultdict
+from datetime import UTC, datetime
+import sys
 
 from rich import box
 from rich.panel import Panel
@@ -10,6 +11,14 @@ from rich.text import Text
 
 from .models import HotTokenCandidate, PairSnapshot
 from .scoring import build_distribution_heuristics
+
+CHAIN_STYLES = {
+    "solana": "bright_green",
+    "base": "bright_blue",
+    "ethereum": "bright_white",
+    "bsc": "bright_yellow",
+    "arbitrum": "bright_cyan",
+}
 
 
 def fmt_usd(value: float) -> str:
@@ -36,11 +45,24 @@ def fmt_pct(value: float) -> str:
 
 
 def _pct_style(value: float) -> str:
+    if value >= 12:
+        return "bold bright_green"
     if value > 0:
         return "green"
+    if value <= -12:
+        return "bold bright_red"
     if value < 0:
         return "red"
     return "white"
+
+
+def _safe_text(value: str) -> str:
+    encoding = sys.stdout.encoding or "utf-8"
+    try:
+        value.encode(encoding)
+        return value
+    except UnicodeEncodeError:
+        return value.encode(encoding, errors="replace").decode(encoding, errors="replace")
 
 
 def _age_label(hours: float | None) -> str:
@@ -54,11 +76,55 @@ def _age_label(hours: float | None) -> str:
     return f"{days}d"
 
 
+def _chain_text(chain_id: str) -> Text:
+    return Text(_safe_text(chain_id), style=CHAIN_STYLES.get(chain_id, "cyan"))
+
+
+def _score_style(score: float) -> str:
+    if score >= 85:
+        return "bold bright_green"
+    if score >= 75:
+        return "bold bright_yellow"
+    return "bold white"
+
+
+def _flow_meter(buys: int, sells: int, width: int = 12) -> Text:
+    total = max(buys + sells, 1)
+    buy_ratio = max(0.0, min(1.0, buys / total))
+    buy_width = int(round(width * buy_ratio))
+    sell_width = max(width - buy_width, 0)
+
+    meter = Text()
+    meter.append("B", style="bold green")
+    meter.append("[" + ("#" * buy_width), style="green")
+    meter.append("." * sell_width + "]", style="red")
+    meter.append("S", style="bold red")
+    meter.append(f" {buy_ratio * 100:>3.0f}/{(1 - buy_ratio) * 100:>3.0f}", style="dim")
+    return meter
+
+
+def _signal_style(tags: list[str], discovery: str) -> str:
+    normalized = {t.lower() for t in tags}
+    if "transaction-spike" in normalized or "momentum" in normalized:
+        return "bold bright_magenta"
+    if "buy-pressure" in normalized:
+        return "magenta"
+    if "fresh-pair" in normalized:
+        return "bright_cyan"
+    if discovery == "boost":
+        return "bright_yellow"
+    return "white"
+
+
 def build_header() -> Panel:
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     title = Text("Dexscreener CLI MCP Tool", style="bold bright_cyan")
-    subtitle = Text(f"Live signal terminal  |  {now}", style="dim")
-    return Panel(Text.assemble(title, "\n", subtitle), border_style="bright_blue")
+    subtitle = Text(f"Live signal terminal  |  {now}", style="cyan")
+    return Panel(
+        Text.assemble(title, "\n", subtitle),
+        border_style="bright_blue",
+        box=box.ROUNDED,
+    )
 
 
 def render_hot_table(
@@ -72,16 +138,20 @@ def render_hot_table(
 ) -> Table:
     table = Table(
         title=(
-            f"[bold]Hot Runner Scan[/bold]  chains={','.join(chains)}  "
-            f"top={limit}  liq>={fmt_usd(min_liquidity_usd)}  "
-            f"vol24>={fmt_usd(min_volume_h24_usd)}  tx1h>={min_txns_h1}"
+            f"[bold bright_white]Hot Runner Scan[/bold bright_white]  "
+            f"[cyan]chains={','.join(chains)}[/cyan]  "
+            f"[yellow]top={limit}[/yellow]  "
+            f"[green]liq>={fmt_usd(min_liquidity_usd)}[/green]  "
+            f"[green]vol24>={fmt_usd(min_volume_h24_usd)}[/green]  "
+            f"[magenta]tx1h>={min_txns_h1}[/magenta]"
         ),
-        box=box.SIMPLE_HEAVY,
+        box=box.ROUNDED,
         header_style="bold bright_white",
         show_edge=True,
+        row_styles=["none", "dim"],
     )
     table.add_column("#", justify="right", style="bold")
-    table.add_column("Chain", style="cyan")
+    table.add_column("Chain")
     table.add_column("Token", style="bold yellow")
     table.add_column("Price", justify="right")
     table.add_column("1h", justify="right")
@@ -90,35 +160,52 @@ def render_hot_table(
     table.add_column("Liquidity", justify="right")
     table.add_column("MCap", justify="right")
     table.add_column("Boost", justify="right")
+    table.add_column("Flow", no_wrap=True)
     table.add_column("Age", justify="right")
-    table.add_column("Signal", style="magenta")
+    table.add_column("Signal")
 
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
         h1 = Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1))
+        vol_style = "bold bright_cyan" if p.volume_h24 >= 1_000_000 else "cyan"
+        liq_style = "bright_green" if p.liquidity_usd >= 100_000 else "green"
         signal = ", ".join(candidate.tags[:3]) if candidate.tags else candidate.discovery
+        signal_text = Text(_safe_text(signal), style=_signal_style(candidate.tags, candidate.discovery))
         boost = f"{candidate.boost_total:.0f}/{candidate.boost_count}"
-        token = f"{p.base_symbol} ({candidate.score:.1f})"
+        token_text = Text.assemble(
+            (f"{_safe_text(p.base_symbol)} ", "bold yellow"),
+            (f"({candidate.score:.1f})", _score_style(candidate.score)),
+        )
+        age = _age_label(p.age_hours)
+        age_style = "bright_cyan" if p.age_hours is not None and p.age_hours < 24 else "white"
         table.add_row(
             str(i),
-            p.chain_id,
-            token,
+            _chain_text(p.chain_id),
+            token_text,
             fmt_price(p.price_usd),
             h1,
-            fmt_usd(p.volume_h24),
+            Text(fmt_usd(p.volume_h24), style=vol_style),
             str(p.txns_h1),
-            fmt_usd(p.liquidity_usd),
+            Text(fmt_usd(p.liquidity_usd), style=liq_style),
             fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
             boost,
-            _age_label(p.age_hours),
-            signal,
+            _flow_meter(p.buys_h1, p.sells_h1),
+            Text(age, style=age_style),
+            signal_text,
         )
+    if not candidates:
+        table.add_row("-", "-", "No candidates matched current filters", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
     return table
 
 
 def render_search_table(pairs: list[PairSnapshot]) -> Table:
-    table = Table(title="[bold]Search Results[/bold]", box=box.SIMPLE_HEAVY)
-    table.add_column("Chain", style="cyan")
+    table = Table(
+        title="[bold bright_white]Search Results[/bold bright_white]",
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("Chain")
     table.add_column("Token", style="bold yellow")
     table.add_column("Pair", style="white")
     table.add_column("Price", justify="right")
@@ -128,55 +215,93 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     table.add_column("1h", justify="right")
     for pair in pairs:
         table.add_row(
-            pair.chain_id,
-            pair.base_symbol,
-            pair.pair_address,
+            _chain_text(pair.chain_id),
+            _safe_text(pair.base_symbol),
+            _safe_text(pair.pair_address),
             fmt_price(pair.price_usd),
             fmt_usd(pair.volume_h24),
             str(pair.txns_h1),
             fmt_usd(pair.liquidity_usd),
-            fmt_pct(pair.price_change_h1),
+            Text(fmt_pct(pair.price_change_h1), style=_pct_style(pair.price_change_h1)),
         )
+    if not pairs:
+        table.add_row("-", "No matches", "-", "-", "-", "-", "-", "-")
     return table
 
 
 def render_pair_detail(pair: PairSnapshot, boost_total: float = 0.0, boost_count: int = 0) -> Panel:
     mcap = pair.market_cap if pair.market_cap > 0 else pair.fdv
     content = Text()
-    content.append(f"{pair.base_name} ({pair.base_symbol}) on {pair.chain_id}/{pair.dex_id}\n", style="bold")
-    content.append(f"Pair: {pair.pair_address}\n", style="dim")
-    content.append(f"Price: {fmt_price(pair.price_usd)} | 1h: {fmt_pct(pair.price_change_h1)} | 24h: {fmt_pct(pair.price_change_h24)}\n")
+    content.append(f"{_safe_text(pair.base_name)} ({_safe_text(pair.base_symbol)})", style="bold bright_white")
+    content.append(" on ", style="dim")
+    content.append(_safe_text(pair.chain_id), style=CHAIN_STYLES.get(pair.chain_id, "cyan"))
+    content.append(f"/{_safe_text(pair.dex_id)}\n", style="cyan")
+    content.append("Pair: ", style="dim")
+    content.append(f"{_safe_text(pair.pair_address)}\n", style="white")
+
+    content.append("Price: ", style="dim")
+    content.append(fmt_price(pair.price_usd), style="bold bright_white")
+    content.append(" | 1h: ", style="dim")
+    content.append(fmt_pct(pair.price_change_h1), style=_pct_style(pair.price_change_h1))
+    content.append(" | 24h: ", style="dim")
+    content.append(fmt_pct(pair.price_change_h24), style=_pct_style(pair.price_change_h24))
+    content.append("\n")
     content.append(
-        f"Volume: 24h {fmt_usd(pair.volume_h24)} | 6h {fmt_usd(pair.volume_h6)} | 1h {fmt_usd(pair.volume_h1)}\n"
+        f"Volume: 24h {fmt_usd(pair.volume_h24)} | 6h {fmt_usd(pair.volume_h6)} | 1h {fmt_usd(pair.volume_h1)}\n",
+        style="bright_cyan",
     )
     content.append(
-        f"Txns: 1h {pair.txns_h1} (B{pair.buys_h1}/S{pair.sells_h1}) | 24h {pair.txns_h24} (B{pair.buys_h24}/S{pair.sells_h24})\n"
+        f"Txns: 1h {pair.txns_h1} (B{pair.buys_h1}/S{pair.sells_h1}) | 24h {pair.txns_h24} (B{pair.buys_h24}/S{pair.sells_h24})\n",
+        style="white",
     )
-    content.append(f"Liquidity: {fmt_usd(pair.liquidity_usd)} | MCap/FDV: {fmt_usd(mcap)}\n")
+    content.append("Flow: ", style="dim")
+    content.append_text(_flow_meter(pair.buys_h1, pair.sells_h1))
+    content.append("\n")
+    content.append("Liquidity: ", style="dim")
+    content.append(fmt_usd(pair.liquidity_usd), style="bold green")
+    content.append(" | MCap/FDV: ", style="dim")
+    content.append(fmt_usd(mcap), style="white")
+    content.append("\n")
     if boost_total or boost_count:
-        content.append(f"Boosts observed: total={boost_total:.0f}, count={boost_count}\n")
+        content.append(f"Boosts observed: total={boost_total:.0f}, count={boost_count}\n", style="bright_yellow")
     if pair.pair_url:
-        content.append(f"Dexscreener: {pair.pair_url}")
-    return Panel(content, title="[bold bright_cyan]Pair Insight[/bold bright_cyan]", border_style="bright_blue")
+        content.append("Dexscreener: ", style="dim")
+        content.append(_safe_text(pair.pair_url), style="bright_blue")
+    return Panel(
+        content,
+        title="[bold bright_cyan]Pair Insight[/bold bright_cyan]",
+        border_style="bright_blue",
+        box=box.ROUNDED,
+    )
 
 
 def render_distribution_panel(candidate: HotTokenCandidate) -> Panel:
     heuristics = build_distribution_heuristics(candidate)
     txt = Text()
     txt.append("Dexscreener API does not expose holder distribution in public endpoints.\n", style="bold yellow")
-    txt.append("Proxy concentration signals from market structure:\n")
+    txt.append("Proxy concentration signals from market structure:\n", style="bright_white")
     txt.append(
         f"- liquidity/market_cap: {heuristics['liquidity_to_market_cap']}\n"
         f"- volume/liquidity (24h): {heuristics['volume_to_liquidity_24h']}\n"
         f"- buy/sell imbalance (1h): {heuristics['buy_sell_imbalance_1h']}\n"
         f"- status: {heuristics['status']}"
     )
-    return Panel(txt, title="[bold bright_magenta]Distribution Proxy[/bold bright_magenta]", border_style="magenta")
+    return Panel(
+        txt,
+        title="[bold bright_magenta]Distribution Proxy[/bold bright_magenta]",
+        border_style="magenta",
+        box=box.ROUNDED,
+    )
 
 
 def render_chain_heat_table(candidates: list[HotTokenCandidate]) -> Table:
-    table = Table(title="Chain Heat", box=box.SIMPLE, expand=True)
-    table.add_column("Chain", style="bold cyan")
+    table = Table(
+        title="[bold bright_white]Chain Heat[/bold bright_white]",
+        box=box.ROUNDED,
+        expand=True,
+        row_styles=["none", "dim"],
+    )
+    table.add_column("Chain")
     table.add_column("Tokens", justify="right")
     table.add_column("Avg 1h", justify="right")
     table.add_column("24h Vol", justify="right")
@@ -194,9 +319,9 @@ def render_chain_heat_table(candidates: list[HotTokenCandidate]) -> Table:
         count = int(data["count"])
         avg_h1 = (data["h1"] / count) if count else 0.0
         table.add_row(
-            chain,
+            _chain_text(chain),
             str(count),
-            fmt_pct(avg_h1),
+            Text(fmt_pct(avg_h1), style=_pct_style(avg_h1)),
             fmt_usd(data["vol"]),
             str(int(data["txns"])),
         )
@@ -207,7 +332,12 @@ def render_chain_heat_table(candidates: list[HotTokenCandidate]) -> Table:
 
 def render_flow_panel(candidates: list[HotTokenCandidate]) -> Panel:
     if not candidates:
-        return Panel("No candidates in current filter set.", title="Flow Summary", border_style="yellow")
+        return Panel(
+            "No candidates in current filter set.",
+            title="[bold bright_white]Flow Summary[/bold bright_white]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
 
     total_vol = sum(c.pair.volume_h24 for c in candidates)
     total_liq = sum(c.pair.liquidity_usd for c in candidates)
@@ -227,10 +357,28 @@ def render_flow_panel(candidates: list[HotTokenCandidate]) -> Panel:
     if not risk_flags:
         risk_flags.append("balanced")
 
+    regime = "risk-on" if avg_h1 > 10 and avg_imbalance > 0 else "risk-off" if avg_imbalance < -0.2 else "mixed"
+    flag_style = "bold magenta"
+    if "sell-pressure" in risk_flags:
+        flag_style = "bold bright_red"
+    elif "balanced" in risk_flags:
+        flag_style = "bold bright_green"
+
     text = Text()
-    text.append(f"24h volume: {fmt_usd(total_vol)}\n")
-    text.append(f"Liquidity sum: {fmt_usd(total_liq)}\n")
-    text.append(f"Average 1h move: {fmt_pct(avg_h1)}\n")
-    text.append(f"Average buy/sell imbalance: {avg_imbalance:+.2f}\n")
-    text.append(f"Flags: {', '.join(risk_flags)}", style="bold magenta")
-    return Panel(text, title="Flow Summary", border_style="bright_blue")
+    text.append("24h volume: ", style="dim")
+    text.append(f"{fmt_usd(total_vol)}\n", style="bright_cyan")
+    text.append("Liquidity sum: ", style="dim")
+    text.append(f"{fmt_usd(total_liq)}\n", style="green")
+    text.append("Average 1h move: ", style="dim")
+    text.append(f"{fmt_pct(avg_h1)}\n", style=_pct_style(avg_h1))
+    text.append("Average buy/sell imbalance: ", style="dim")
+    text.append(f"{avg_imbalance:+.2f}\n", style="bold white")
+    text.append("Regime: ", style="dim")
+    text.append(f"{regime}\n", style="bold bright_white")
+    text.append(f"Flags: {', '.join(risk_flags)}", style=flag_style)
+    return Panel(
+        text,
+        title="[bold bright_white]Flow Summary[/bold bright_white]",
+        border_style="bright_blue",
+        box=box.ROUNDED,
+    )
