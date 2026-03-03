@@ -27,8 +27,10 @@ from .ui import (
     render_distribution_panel,
     render_flow_panel,
     render_hot_table,
+    render_rank_movers_table,
     render_new_runner_spotlight,
     render_new_runners_table,
+    render_top_runner_cards,
     render_pair_detail,
     render_search_table,
 )
@@ -251,6 +253,24 @@ def _new_runner_rank(candidate: HotTokenCandidate) -> tuple[float, float, int, f
     )
 
 
+def _select_new_runners(
+    *,
+    candidates: list[HotTokenCandidate],
+    max_age_hours: float,
+    include_unknown_age: bool,
+    limit: int,
+) -> list[HotTokenCandidate]:
+    fresh: list[HotTokenCandidate] = []
+    for candidate in candidates:
+        age = candidate.pair.age_hours
+        if age is None and not include_unknown_age:
+            continue
+        if age is not None and age > max_age_hours:
+            continue
+        fresh.append(candidate)
+    return sorted(fresh, key=_new_runner_rank, reverse=True)[:limit]
+
+
 @app.command("hot")
 def hot(
     chains: Annotated[str | None, typer.Option(help="Comma-separated chain IDs")] = None,
@@ -304,16 +324,12 @@ def new_runners(
     )
 
     candidates = asyncio.run(_scan(filters))
-    fresh: list[HotTokenCandidate] = []
-    for candidate in candidates:
-        age = candidate.pair.age_hours
-        if age is None and not include_unknown_age:
-            continue
-        if age is not None and age > max_age_hours:
-            continue
-        fresh.append(candidate)
-
-    ranked = sorted(fresh, key=_new_runner_rank, reverse=True)[:limit]
+    ranked = _select_new_runners(
+        candidates=candidates,
+        max_age_hours=max_age_hours,
+        include_unknown_age=include_unknown_age,
+        limit=limit,
+    )
     if as_json:
         typer.echo(json.dumps([_candidate_json(c) for c in ranked], indent=2, ensure_ascii=True))
         return
@@ -340,6 +356,90 @@ def new_runners(
             f"[yellow]Only found {len(ranked)} new runners under {max_age_hours:.0f}h. "
             "Try lowering min liquidity/volume/txns filters.[/yellow]"
         )
+
+
+@app.command("new-runners-watch")
+def new_runners_watch(
+    chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
+    limit: Annotated[int, typer.Option(help="Number of fresh runners to show")] = 10,
+    max_age_hours: Annotated[float, typer.Option(help="Maximum token age in hours")] = 24.0,
+    interval: Annotated[float, typer.Option(help="Refresh interval seconds")] = 7.0,
+    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 20_000.0,
+    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 50_000.0,
+    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 25,
+    min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
+    include_unknown_age: Annotated[bool, typer.Option(help="Include tokens with unknown pair age")] = False,
+    cycles: Annotated[int, typer.Option(help="Stop after N refreshes (0 = infinite)")] = 0,
+    screen: Annotated[bool, typer.Option(help="Use fullscreen alternate buffer")] = True,
+) -> None:
+    """Full-screen live board for tracking new runner rotations."""
+    chain = chain.lower().strip()
+    fetch_limit = min(max(limit * 6, 60), 72)
+    filters = ScanFilters(
+        chains=(chain,),
+        limit=fetch_limit,
+        min_liquidity_usd=min_liquidity_usd,
+        min_volume_h24_usd=min_volume_h24_usd,
+        min_txns_h1=min_txns_h1,
+        min_price_change_h1=min_price_change_h1,
+    )
+
+    async def loop() -> None:
+        async with DexScreenerClient() as client:
+            scanner = HotScanner(client)
+            previous_ranks: dict[tuple[str, str], int] = {}
+            cycle = 0
+            with Live(console=console, screen=screen, refresh_per_second=6) as live:
+                while True:
+                    cycle += 1
+                    raw = await scanner.scan(filters)
+                    ranked = _select_new_runners(
+                        candidates=raw,
+                        max_age_hours=max_age_hours,
+                        include_unknown_age=include_unknown_age,
+                        limit=limit,
+                    )
+                    view = Group(
+                        build_header(),
+                        Columns(
+                            [
+                                render_new_runner_spotlight(
+                                    ranked,
+                                    chain=chain,
+                                    max_age_hours=max_age_hours,
+                                    limit=limit,
+                                ),
+                                render_flow_panel(ranked),
+                            ]
+                        ),
+                        render_top_runner_cards(ranked, pulse=(cycle % 2 == 0)),
+                        render_new_runners_table(
+                            ranked,
+                            chain=chain,
+                            max_age_hours=max_age_hours,
+                            limit=limit,
+                        ),
+                        render_rank_movers_table(
+                            ranked,
+                            previous_ranks=previous_ranks,
+                            limit=limit,
+                        ),
+                        Panel(
+                            f"Refreshing every {interval:.1f}s | cycle={cycle} | Press Ctrl+C to exit",
+                            border_style="dim",
+                            box=box.ROUNDED,
+                        ),
+                    )
+                    live.update(view)
+                    previous_ranks = {candidate.key: idx for idx, candidate in enumerate(ranked, start=1)}
+                    if cycles > 0 and cycle >= cycles:
+                        return
+                    await asyncio.sleep(interval)
+
+    try:
+        asyncio.run(loop())
+    except KeyboardInterrupt:
+        console.print("[dim]Stopped new-runners watch mode.[/dim]")
 
 
 @app.command("watch")
