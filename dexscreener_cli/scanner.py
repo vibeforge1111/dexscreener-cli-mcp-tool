@@ -265,6 +265,77 @@ class HotScanner:
         for key, count in latest_counter.items():
             seeds[key].boost_count = max(seeds[key].boost_count, count)
 
+        # Add a bounded search-based discovery layer so chains like Base are not
+        # under-covered when boosts/profiles are Solana-heavy.
+        now_ms = int(time.time() * 1000)
+        query_set: set[str] = set()
+        for chain_id in chains:
+            query_set.update(
+                {
+                    chain_id,
+                    f"{chain_id} new",
+                    f"{chain_id} launch",
+                    f"{chain_id} meme",
+                    f"{chain_id} ai",
+                    f"{chain_id} degen",
+                }
+            )
+        search_queries = tuple(sorted(query_set))
+        def as_float(value: Any) -> float:
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def as_int(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        if search_queries:
+            search_rows_batches = await asyncio.gather(
+                *(self._client.search_pairs(query) for query in search_queries),
+                return_exceptions=True,
+            )
+            for batch in search_rows_batches:
+                if isinstance(batch, Exception):
+                    continue
+                for row in batch:
+                    chain_id = str(row.get("chainId", ""))
+                    if chain_id not in chains:
+                        continue
+                    base = row.get("baseToken", {}) or {}
+                    token = str(base.get("address", ""))
+                    if not token:
+                        continue
+
+                    tx_h1 = row.get("txns", {}).get("h1", {}) if isinstance(row.get("txns"), dict) else {}
+                    buys_h1 = as_int((tx_h1 or {}).get("buys", 0))
+                    sells_h1 = as_int((tx_h1 or {}).get("sells", 0))
+                    txns_h1 = buys_h1 + sells_h1
+                    volume_h24 = as_float((row.get("volume", {}) or {}).get("h24", 0))
+                    liquidity_usd = as_float((row.get("liquidity", {}) or {}).get("usd", 0))
+                    pair_created_at = row.get("pairCreatedAt")
+                    freshness_bonus = 0.0
+                    if pair_created_at:
+                        age_h = max((now_ms - as_int(pair_created_at)) / 3_600_000.0, 0.0)
+                        freshness_bonus = max(0.0, (168.0 - age_h) / 168.0) * 60.0
+
+                    search_weight = (
+                        min(volume_h24 / 100_000.0, 25.0)
+                        + min(liquidity_usd / 50_000.0, 15.0)
+                        + min(txns_h1 / 25.0, 20.0)
+                        + freshness_bonus
+                    )
+                    upsert(
+                        chain_id,
+                        token,
+                        boost_total=search_weight,
+                        boost_count=1,
+                        discovery="search",
+                    )
+
         return seeds
 
     async def _best_pair_for_token(self, chain_id: str, token_address: str) -> PairSnapshot | None:
