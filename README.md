@@ -65,6 +65,11 @@ Best 10 new runners of the day on Base:
 ds new-runners --chain base --limit 10 --max-age-hours 24
 ```
 
+Live new-runner rotation board (cards + rank movers):
+```bash
+ds new-runners-watch --chain base --limit 10 --max-age-hours 24 --interval 6
+```
+
 Live watch board:
 ```bash
 ds watch --chains solana,base,ethereum --interval 7
