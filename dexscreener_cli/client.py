@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections import deque
 from time import monotonic
 from typing import Any
@@ -54,6 +55,18 @@ class DexScreenerClient:
         self._cache_ttl = cache_ttl_seconds
         self._cache: dict[str, tuple[float, Any]] = {}
         self._cache_lock = asyncio.Lock()
+        self._bucket_pause_until: dict[str, float] = {"slow": 0.0, "fast": 0.0}
+        self._bucket_penalty_seconds: dict[str, float] = {"slow": 0.0, "fast": 0.0}
+        self._stats_lock = asyncio.Lock()
+        self._stats: dict[str, Any] = {
+            "requests_total": 0,
+            "cache_hits": 0,
+            "retries": 0,
+            "throttled_429": 0,
+            "errors": 0,
+            "status_counts": {},
+            "bucket_wait_seconds": {"slow": 0.0, "fast": 0.0},
+        }
 
     async def __aenter__(self) -> "DexScreenerClient":
         return self
@@ -75,6 +88,49 @@ class DexScreenerClient:
                 return None
             return payload
 
+    async def _bump_stat(self, key: str, value: int = 1) -> None:
+        async with self._stats_lock:
+            self._stats[key] = int(self._stats.get(key, 0)) + value
+
+    async def _bump_status(self, status_code: int) -> None:
+        async with self._stats_lock:
+            status = self._stats.get("status_counts", {})
+            if not isinstance(status, dict):
+                status = {}
+                self._stats["status_counts"] = status
+            sk = str(status_code)
+            status[sk] = int(status.get(sk, 0)) + 1
+
+    async def _add_bucket_wait(self, bucket: str, seconds: float) -> None:
+        async with self._stats_lock:
+            waits = self._stats.get("bucket_wait_seconds", {})
+            if not isinstance(waits, dict):
+                waits = {"slow": 0.0, "fast": 0.0}
+                self._stats["bucket_wait_seconds"] = waits
+            waits[bucket] = float(waits.get(bucket, 0.0)) + max(seconds, 0.0)
+
+    def _retry_after_seconds(self, response: httpx.Response) -> float | None:
+        value = response.headers.get("Retry-After")
+        if not value:
+            return None
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return None
+
+    async def get_runtime_stats(self) -> dict[str, Any]:
+        async with self._stats_lock:
+            return {
+                "requests_total": int(self._stats.get("requests_total", 0)),
+                "cache_hits": int(self._stats.get("cache_hits", 0)),
+                "retries": int(self._stats.get("retries", 0)),
+                "throttled_429": int(self._stats.get("throttled_429", 0)),
+                "errors": int(self._stats.get("errors", 0)),
+                "status_counts": dict(self._stats.get("status_counts", {})),
+                "bucket_wait_seconds": dict(self._stats.get("bucket_wait_seconds", {})),
+                "bucket_penalty_seconds": dict(self._bucket_penalty_seconds),
+            }
+
     async def _cache_set(self, key: str, payload: Any) -> None:
         async with self._cache_lock:
             self._cache[key] = (monotonic() + self._cache_ttl, payload)
@@ -82,19 +138,45 @@ class DexScreenerClient:
     async def _get_json(self, path: str, bucket: str) -> Any:
         cached = await self._cache_get(path)
         if cached is not None:
+            await self._bump_stat("cache_hits")
             return cached
 
         limiter = self._limiters[bucket]
         attempt = 0
         while True:
+            now = monotonic()
+            pause_until = self._bucket_pause_until.get(bucket, 0.0)
+            if now < pause_until:
+                wait_for = pause_until - now
+                await self._add_bucket_wait(bucket, wait_for)
+                await asyncio.sleep(wait_for)
             await limiter.acquire()
+            await self._bump_stat("requests_total")
             response = await self._client.get(path)
+            await self._bump_status(response.status_code)
+            if response.status_code == 429:
+                await self._bump_stat("throttled_429")
+                retry_after = self._retry_after_seconds(response)
+                base_penalty = self._bucket_penalty_seconds.get(bucket, 0.0)
+                next_penalty = max(base_penalty * 2.0, 1.5)
+                next_penalty = min(next_penalty, 30.0)
+                self._bucket_penalty_seconds[bucket] = next_penalty
+                cooldown = max(retry_after or 0.0, next_penalty)
+                # Jitter avoids synchronized retry bursts.
+                cooldown += random.uniform(0.05, 0.35)
+                self._bucket_pause_until[bucket] = max(self._bucket_pause_until.get(bucket, 0.0), monotonic() + cooldown)
             if response.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
+                await self._bump_stat("retries")
                 sleep_for = RETRY_BACKOFF_SECONDS * (2**attempt)
+                sleep_for += random.uniform(0.02, 0.2)
                 await asyncio.sleep(sleep_for)
                 attempt += 1
                 continue
+            if response.status_code >= 400:
+                await self._bump_stat("errors")
             response.raise_for_status()
+            # Decay bucket penalty after healthy responses.
+            self._bucket_penalty_seconds[bucket] = max(self._bucket_penalty_seconds.get(bucket, 0.0) * 0.65, 0.0)
             payload = response.json()
             await self._cache_set(path, payload)
             return payload
