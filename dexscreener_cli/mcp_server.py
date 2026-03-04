@@ -14,6 +14,12 @@ from .state import ScanPreset, StateStore
 from .task_runner import execute_task_once, select_due_tasks
 
 mcp = FastMCP("dexscreener-cli-mcp-tool")
+SCAN_PROFILE_NAMES: tuple[str, ...] = ("strict", "balanced", "discovery")
+SCAN_PROFILE_BASELINES: dict[str, dict[str, float]] = {
+    "strict": {"min_liquidity_usd": 40_000.0, "min_volume_h24_usd": 120_000.0, "min_txns_h1": 110.0},
+    "balanced": {"min_liquidity_usd": 28_000.0, "min_volume_h24_usd": 70_000.0, "min_txns_h1": 55.0},
+    "discovery": {"min_liquidity_usd": 15_000.0, "min_volume_h24_usd": 20_000.0, "min_txns_h1": 12.0},
+}
 
 
 def _serialize_candidate(candidate: HotTokenCandidate) -> dict[str, Any]:
@@ -453,6 +459,70 @@ async def inspect_token(chain_id: str, token_address: str) -> dict[str, Any]:
             "note": "Public Dexscreener API does not expose holder-level distribution directly.",
             "additionalPairCount": max(len(pairs) - 1, 0),
         }
+
+
+@mcp.resource("dexscreener://profiles", name="profiles", description="Recommended scan profiles.")
+async def resource_profiles() -> dict[str, Any]:
+    return {"profiles": SCAN_PROFILE_BASELINES, "names": list(SCAN_PROFILE_NAMES)}
+
+
+@mcp.resource("dexscreener://presets", name="presets", description="Current saved scan presets.")
+async def resource_presets() -> dict[str, Any]:
+    store = StateStore()
+    return {"count": len(store.list_presets()), "items": [p.to_dict() for p in store.list_presets()]}
+
+
+@mcp.resource("dexscreener://tasks", name="tasks", description="Current saved scan tasks.")
+async def resource_tasks() -> dict[str, Any]:
+    store = StateStore()
+    return {"count": len(store.list_tasks()), "items": [t.to_dict() for t in store.list_tasks()]}
+
+
+@mcp.prompt("alpha_scan_plan")
+def prompt_alpha_scan_plan(
+    chains: str = "base,solana",
+    profile: str = "balanced",
+    objective: str = "Spot high-quality new runners with manageable risk",
+) -> str:
+    selected_profile = profile if profile in SCAN_PROFILE_NAMES else "balanced"
+    baseline = SCAN_PROFILE_BASELINES[selected_profile]
+    return (
+        "Build an execution-first scan plan for dexscreener-cli-mcp-tool.\n"
+        f"Objective: {objective}\n"
+        f"Chains: {chains}\n"
+        f"Profile: {selected_profile}\n"
+        "Threshold baseline:\n"
+        f"- min_liquidity_usd={baseline['min_liquidity_usd']}\n"
+        f"- min_volume_h24_usd={baseline['min_volume_h24_usd']}\n"
+        f"- min_txns_h1={int(baseline['min_txns_h1'])}\n"
+        "Return:\n"
+        "1) exact CLI commands,\n"
+        "2) alert setup recommendation,\n"
+        "3) fallback profile if no rows are found,\n"
+        "4) operational risk checklist."
+    )
+
+
+@mcp.prompt("runner_triage")
+def prompt_runner_triage(
+    token_symbol: str,
+    chain_id: str,
+    score: float,
+    risk_score: float,
+    volume_h24: float,
+    liquidity_usd: float,
+) -> str:
+    return (
+        "Triage this candidate for short-term momentum trading.\n"
+        f"Token: {chain_id}:{token_symbol}\n"
+        f"score={score:.2f}, risk_score={risk_score:.2f}, "
+        f"volume_h24={volume_h24:.0f}, liquidity_usd={liquidity_usd:.0f}\n"
+        "Provide:\n"
+        "1) quality verdict (A/B/C),\n"
+        "2) failure mode to watch,\n"
+        "3) invalidation trigger,\n"
+        "4) whether to alert now or wait one cycle."
+    )
 
 
 def main() -> None:
