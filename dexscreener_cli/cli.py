@@ -104,6 +104,24 @@ NEW_TOKEN_SEARCH_QUERIES: tuple[str, ...] = (
     "o",
     "u",
 )
+SCAN_PROFILE_NAMES: tuple[str, ...] = ("strict", "balanced", "discovery")
+SCAN_PROFILE_BASELINES: dict[str, dict[str, float]] = {
+    "strict": {"min_liquidity_usd": 40_000.0, "min_volume_h24_usd": 120_000.0, "min_txns_h1": 110.0},
+    "balanced": {"min_liquidity_usd": 28_000.0, "min_volume_h24_usd": 70_000.0, "min_txns_h1": 55.0},
+    "discovery": {"min_liquidity_usd": 15_000.0, "min_volume_h24_usd": 20_000.0, "min_txns_h1": 12.0},
+}
+NEW_COIN_PROFILE_BASELINES: dict[str, dict[str, float]] = {
+    "strict": {"min_liquidity_usd": 35_000.0, "min_volume_h24_usd": 25_000.0, "min_txns_h24": 220.0},
+    "balanced": {"min_liquidity_usd": 25_000.0, "min_volume_h24_usd": 6_000.0, "min_txns_h24": 80.0},
+    "discovery": {"min_liquidity_usd": 12_000.0, "min_volume_h24_usd": 1_500.0, "min_txns_h24": 20.0},
+}
+CHAIN_PROFILE_MULTIPLIER: dict[str, float] = {
+    "solana": 1.0,
+    "base": 0.9,
+    "bsc": 0.85,
+    "arbitrum": 0.95,
+    "ethereum": 1.15,
+}
 
 
 def _status_badge(status: str) -> Text:
@@ -161,6 +179,33 @@ def _ai_rows_json(rows: list[dict[str, object]]) -> str:
 def _parse_chains(raw: str) -> tuple[str, ...]:
     values = tuple(c.strip().lower() for c in raw.split(",") if c.strip())
     return values or DEFAULT_CHAINS
+
+
+def _profile_multiplier(chains: tuple[str, ...]) -> float:
+    factors = [CHAIN_PROFILE_MULTIPLIER.get(chain, 1.0) for chain in chains]
+    return max(factors) if factors else 1.0
+
+
+def _resolve_scan_profile(profile: str, chains: tuple[str, ...]) -> dict[str, float]:
+    selected = profile if profile in SCAN_PROFILE_NAMES else "balanced"
+    baseline = SCAN_PROFILE_BASELINES[selected]
+    factor = _profile_multiplier(chains)
+    return {
+        "min_liquidity_usd": baseline["min_liquidity_usd"] * factor,
+        "min_volume_h24_usd": baseline["min_volume_h24_usd"] * factor,
+        "min_txns_h1": max(1.0, round(baseline["min_txns_h1"] * factor)),
+    }
+
+
+def _resolve_new_coin_profile(profile: str, chain: str) -> dict[str, float]:
+    selected = profile if profile in SCAN_PROFILE_NAMES else "balanced"
+    baseline = NEW_COIN_PROFILE_BASELINES[selected]
+    factor = CHAIN_PROFILE_MULTIPLIER.get(chain, 1.0)
+    return {
+        "min_liquidity_usd": baseline["min_liquidity_usd"] * factor,
+        "min_volume_h24_usd": baseline["min_volume_h24_usd"] * factor,
+        "min_txns_h24": max(1.0, round(baseline["min_txns_h24"] * factor)),
+    }
 
 
 def _candidate_json(c: HotTokenCandidate) -> dict[str, object]:
@@ -902,35 +947,42 @@ def top_new(
     chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
     days: Annotated[int, typer.Option(help="Lookback window in days")] = 7,
     limit: Annotated[int, typer.Option(help="Max rows to show")] = 10,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 1_000.0,
+    profile: Annotated[str, typer.Option(help="Filter profile: strict/balanced/discovery")] = "balanced",
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Minimum pair liquidity in USD")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Minimum 24h volume in USD")] = None,
     min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 0,
-    min_txns_h24: Annotated[int, typer.Option(help="Minimum 24h transactions")] = 50,
+    min_txns_h24: Annotated[int | None, typer.Option(help="Minimum 24h transactions")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Output machine-readable JSON")] = False,
 ) -> None:
     """Show top new coins by 24h volume for a rolling time window."""
+    chain_id = chain.lower().strip()
+    resolved_profile = _resolve_new_coin_profile(profile, chain_id)
+    resolved_min_liquidity = min_liquidity_usd if min_liquidity_usd is not None else resolved_profile["min_liquidity_usd"]
+    resolved_min_volume = min_volume_h24_usd if min_volume_h24_usd is not None else resolved_profile["min_volume_h24_usd"]
+    resolved_min_txns_h24 = min_txns_h24 if min_txns_h24 is not None else int(resolved_profile["min_txns_h24"])
+
     rows = asyncio.run(
         _scan_new_launches(
-            chain=chain,
+            chain=chain_id,
             days=days,
             limit=limit,
-            min_liquidity_usd=min_liquidity_usd,
-            min_volume_h24_usd=min_volume_h24_usd,
+            min_liquidity_usd=resolved_min_liquidity,
+            min_volume_h24_usd=resolved_min_volume,
             min_txns_h1=min_txns_h1,
-            min_txns_h24=min_txns_h24,
+            min_txns_h24=resolved_min_txns_h24,
         )
     )
     if as_json:
         typer.echo(_ai_rows_json(rows))
         return
     _render_new_launches_board(
-        chain=chain.lower().strip(),
+        chain=chain_id,
         days=max(days, 1),
         rows=rows,
-        min_liquidity_usd=min_liquidity_usd,
-        min_volume_h24_usd=min_volume_h24_usd,
+        min_liquidity_usd=resolved_min_liquidity,
+        min_volume_h24_usd=resolved_min_volume,
         min_txns_h1=min_txns_h1,
-        min_txns_h24=min_txns_h24,
+        min_txns_h24=resolved_min_txns_h24,
     )
 
 
@@ -939,9 +991,10 @@ def alpha_drops(
     chains: Annotated[str, typer.Option(help="Comma-separated chain IDs")] = "base,solana",
     limit: Annotated[int, typer.Option(help="Max rows")] = 15,
     max_age_hours: Annotated[float, typer.Option(help="Only include pairs newer than this age")] = 6.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 35_000.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 90_000.0,
-    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 80,
+    profile: Annotated[str, typer.Option(help="Filter profile: strict/balanced/discovery")] = "balanced",
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Minimum pair liquidity in USD")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Minimum 24h volume in USD")] = None,
+    min_txns_h1: Annotated[int | None, typer.Option(help="Minimum 1h transactions")] = None,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
     sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "readiness",
     min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 55.0,
@@ -955,14 +1008,18 @@ def alpha_drops(
     """One-shot alpha drop scan across configured chains with quality gates."""
     scan_chains = _parse_chains(chains)
     selected_sort = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "readiness"
+    resolved_profile = _resolve_scan_profile(profile, scan_chains)
+    resolved_min_liquidity = min_liquidity_usd if min_liquidity_usd is not None else resolved_profile["min_liquidity_usd"]
+    resolved_min_volume = min_volume_h24_usd if min_volume_h24_usd is not None else resolved_profile["min_volume_h24_usd"]
+    resolved_min_txns = min_txns_h1 if min_txns_h1 is not None else int(resolved_profile["min_txns_h1"])
     candidates = asyncio.run(
         _scan_alpha_drops(
             chains=scan_chains,
             limit=limit,
             max_age_hours=max_age_hours,
-            min_liquidity_usd=min_liquidity_usd,
-            min_volume_h24_usd=min_volume_h24_usd,
-            min_txns_h1=min_txns_h1,
+            min_liquidity_usd=resolved_min_liquidity,
+            min_volume_h24_usd=resolved_min_volume,
+            min_txns_h1=resolved_min_txns,
             min_price_change_h1=min_price_change_h1,
             sort_by=selected_sort,
             min_breakout_readiness=min_breakout_readiness,
@@ -999,9 +1056,10 @@ def alpha_drops_watch(
     limit: Annotated[int, typer.Option(help="Max rows")] = 15,
     max_age_hours: Annotated[float, typer.Option(help="Only include pairs newer than this age")] = 6.0,
     interval: Annotated[float, typer.Option(help="Refresh interval seconds")] = 6.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 35_000.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 90_000.0,
-    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 80,
+    profile: Annotated[str, typer.Option(help="Filter profile: strict/balanced/discovery")] = "balanced",
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Minimum pair liquidity in USD")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Minimum 24h volume in USD")] = None,
+    min_txns_h1: Annotated[int | None, typer.Option(help="Minimum 1h transactions")] = None,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
     sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "readiness",
     min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 55.0,
@@ -1031,6 +1089,10 @@ def alpha_drops_watch(
     """Live alpha-drop scanner with optional realtime notifications."""
     scan_chains = _parse_chains(chains)
     selected_sort = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "readiness"
+    resolved_profile = _resolve_scan_profile(profile, scan_chains)
+    resolved_min_liquidity = min_liquidity_usd if min_liquidity_usd is not None else resolved_profile["min_liquidity_usd"]
+    resolved_min_volume = min_volume_h24_usd if min_volume_h24_usd is not None else resolved_profile["min_volume_h24_usd"]
+    resolved_min_txns = min_txns_h1 if min_txns_h1 is not None else int(resolved_profile["min_txns_h1"])
     try:
         alerts = _build_alert_config(
             webhook_url=webhook_url,
@@ -1065,9 +1127,9 @@ def alpha_drops_watch(
                     chains=scan_chains,
                     limit=limit,
                     max_age_hours=max_age_hours,
-                    min_liquidity_usd=min_liquidity_usd,
-                    min_volume_h24_usd=min_volume_h24_usd,
-                    min_txns_h1=min_txns_h1,
+                    min_liquidity_usd=resolved_min_liquidity,
+                    min_volume_h24_usd=resolved_min_volume,
+                    min_txns_h1=resolved_min_txns,
                     min_price_change_h1=min_price_change_h1,
                     sort_by=selected_sort,
                     min_breakout_readiness=min_breakout_readiness,
@@ -1144,9 +1206,10 @@ def new_runners(
     chain: Annotated[str, typer.Option(help="Chain ID, defaults to base")] = "base",
     limit: Annotated[int, typer.Option(help="Number of fresh runners to show")] = 10,
     max_age_hours: Annotated[float, typer.Option(help="Maximum token age in hours")] = 24.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 50_000.0,
-    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 25,
+    profile: Annotated[str, typer.Option(help="Filter profile: strict/balanced/discovery")] = "balanced",
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Minimum pair liquidity in USD")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Minimum 24h volume in USD")] = None,
+    min_txns_h1: Annotated[int | None, typer.Option(help="Minimum 1h transactions")] = None,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
     sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "score",
     min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 0.0,
@@ -1161,13 +1224,17 @@ def new_runners(
     """Show best new runners for a chain (optimized for day-trading discovery)."""
     chain = chain.lower().strip()
     sort_by = sort_by if sort_by in NEW_RUNNER_SORT_MODES else "score"
+    resolved_profile = _resolve_scan_profile(profile, (chain,))
+    resolved_min_liquidity = min_liquidity_usd if min_liquidity_usd is not None else resolved_profile["min_liquidity_usd"]
+    resolved_min_volume = min_volume_h24_usd if min_volume_h24_usd is not None else resolved_profile["min_volume_h24_usd"]
+    resolved_min_txns = min_txns_h1 if min_txns_h1 is not None else int(resolved_profile["min_txns_h1"])
     fetch_limit = min(max(limit * 6, 60), 72)
     filters = ScanFilters(
         chains=(chain,),
         limit=fetch_limit,
-        min_liquidity_usd=min_liquidity_usd,
-        min_volume_h24_usd=min_volume_h24_usd,
-        min_txns_h1=min_txns_h1,
+        min_liquidity_usd=resolved_min_liquidity,
+        min_volume_h24_usd=resolved_min_volume,
+        min_txns_h1=resolved_min_txns,
         min_price_change_h1=min_price_change_h1,
     )
 
@@ -1220,9 +1287,10 @@ def new_runners_watch(
     limit: Annotated[int, typer.Option(help="Number of fresh runners to show")] = 10,
     max_age_hours: Annotated[float, typer.Option(help="Maximum token age in hours")] = 24.0,
     interval: Annotated[float, typer.Option(help="Refresh interval seconds")] = 7.0,
-    min_liquidity_usd: Annotated[float, typer.Option(help="Minimum pair liquidity in USD")] = 25_000.0,
-    min_volume_h24_usd: Annotated[float, typer.Option(help="Minimum 24h volume in USD")] = 50_000.0,
-    min_txns_h1: Annotated[int, typer.Option(help="Minimum 1h transactions")] = 25,
+    profile: Annotated[str, typer.Option(help="Filter profile: strict/balanced/discovery")] = "balanced",
+    min_liquidity_usd: Annotated[float | None, typer.Option(help="Minimum pair liquidity in USD")] = None,
+    min_volume_h24_usd: Annotated[float | None, typer.Option(help="Minimum 24h volume in USD")] = None,
+    min_txns_h1: Annotated[int | None, typer.Option(help="Minimum 1h transactions")] = None,
     min_price_change_h1: Annotated[float, typer.Option(help="Minimum 1h price change percent")] = 0.0,
     sort_by: Annotated[str, typer.Option(help="Sort mode: score/readiness/rs/volume/momentum")] = "score",
     min_breakout_readiness: Annotated[float, typer.Option(help="Minimum breakout readiness (0-100)")] = 0.0,
@@ -1246,13 +1314,18 @@ def new_runners_watch(
         else:
             chain_pool = (chain, *tuple(c for c in parsed if c != chain))
 
+    resolved_profile = _resolve_scan_profile(profile, chain_pool)
+    resolved_min_liquidity = min_liquidity_usd if min_liquidity_usd is not None else resolved_profile["min_liquidity_usd"]
+    resolved_min_volume = min_volume_h24_usd if min_volume_h24_usd is not None else resolved_profile["min_volume_h24_usd"]
+    resolved_min_txns = min_txns_h1 if min_txns_h1 is not None else int(resolved_profile["min_txns_h1"])
+
     fetch_limit = min(max(limit * 6, 60), 72)
     filters = ScanFilters(
         chains=(chain,),
         limit=fetch_limit,
-        min_liquidity_usd=min_liquidity_usd,
-        min_volume_h24_usd=min_volume_h24_usd,
-        min_txns_h1=min_txns_h1,
+        min_liquidity_usd=resolved_min_liquidity,
+        min_volume_h24_usd=resolved_min_volume,
+        min_txns_h1=resolved_min_txns,
         min_price_change_h1=min_price_change_h1,
     )
 
@@ -1520,6 +1593,52 @@ def why() -> None:
         },
     }
     console.print(json.dumps(payload, indent=2))
+
+
+@app.command("profiles")
+def profiles(
+    chains: Annotated[str, typer.Option(help="Comma-separated chains to preview")] = ",".join(DEFAULT_CHAINS),
+) -> None:
+    """Show chain-aware threshold profiles used by runner/new-coin scanners."""
+    selected_chains = _parse_chains(chains)
+    table = Table(
+        title="[bold bright_white]Chain-Aware Profiles[/bold bright_white]",
+        box=box.ROUNDED,
+        header_style="bold bright_white",
+        row_styles=["none", "dim"],
+    )
+    table.add_column("Profile")
+    table.add_column("Chains")
+    table.add_column("Min Liq", justify="right")
+    table.add_column("Min Vol24", justify="right")
+    table.add_column("Min Tx1h", justify="right")
+    table.add_column("Top-New Tx24h", justify="right")
+
+    chain_label = ",".join(selected_chains)
+    for profile in SCAN_PROFILE_NAMES:
+        runner = _resolve_scan_profile(profile, selected_chains)
+        top_new = _resolve_new_coin_profile(profile, selected_chains[0])
+        table.add_row(
+            profile,
+            chain_label,
+            fmt_usd(runner["min_liquidity_usd"]),
+            fmt_usd(runner["min_volume_h24_usd"]),
+            str(int(runner["min_txns_h1"])),
+            str(int(top_new["min_txns_h24"])),
+        )
+
+    notes = Panel(
+        (
+            "Profiles auto-scale by chain multiplier.\n"
+            "Explicit CLI thresholds always override profile-derived values.\n"
+            "Use profile=discovery for wider net, strict for higher-quality runners."
+        ),
+        border_style="dim",
+        box=box.ROUNDED,
+    )
+    console.print(build_header())
+    console.print(table)
+    console.print(notes)
 
 
 @preset_app.command("save")
