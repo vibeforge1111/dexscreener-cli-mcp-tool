@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 from collections import deque
+from itertools import islice
 from time import monotonic
 from typing import Any
 
@@ -185,6 +186,10 @@ class DexScreenerClient:
         data = await self._get_json("/token-profiles/latest/v1", bucket="slow")
         return list(data)
 
+    async def get_community_takeovers_latest(self) -> list[dict[str, Any]]:
+        data = await self._get_json("/community-takeovers/latest/v1", bucket="slow")
+        return list(data)
+
     async def get_token_boosts_latest(self) -> list[dict[str, Any]]:
         data = await self._get_json("/token-boosts/latest/v1", bucket="slow")
         return list(data)
@@ -219,3 +224,26 @@ class DexScreenerClient:
             bucket="fast",
         )
         return list(data)
+
+    @staticmethod
+    def _chunked(values: list[str], size: int) -> list[list[str]]:
+        iterator = iter(values)
+        chunks: list[list[str]] = []
+        while True:
+            chunk = list(islice(iterator, size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return chunks
+
+    async def get_pairs_for_tokens(self, chain_id: str, token_addresses: list[str]) -> list[dict[str, Any]]:
+        unique = [token.strip() for token in token_addresses if token.strip()]
+        # Dex API allows up to 30 token addresses per request for /tokens/v1.
+        chunked = self._chunked(list(dict.fromkeys(unique)), 30)
+        merged: list[dict[str, Any]] = []
+        for chunk in chunked:
+            path = f"/tokens/v1/{chain_id}/" + ",".join(chunk)
+            rows = await self._get_json(path, bucket="fast")
+            if isinstance(rows, list):
+                merged.extend(rows)
+        return merged

@@ -187,10 +187,11 @@ class HotScanner:
             candidate.tags = list(dict.fromkeys(tags))
 
     async def _collect_seeds(self, chains: tuple[str, ...]) -> dict[tuple[str, str], _SeedToken]:
-        boosts_top, boosts_latest, profiles = await asyncio.gather(
+        boosts_top, boosts_latest, profiles, takeovers = await asyncio.gather(
             self._client.get_token_boosts_top(),
             self._client.get_token_boosts_latest(),
             self._client.get_token_profiles_latest(),
+            self._client.get_community_takeovers_latest(),
         )
 
         seeds: dict[tuple[str, str], _SeedToken] = {}
@@ -260,6 +261,20 @@ class HotScanner:
                 token,
                 has_profile=True,
                 discovery="profiles",
+            )
+
+        for row in takeovers:
+            chain_id = str(row.get("chainId", ""))
+            token = str(row.get("tokenAddress", ""))
+            if chain_id not in chains or not token:
+                continue
+            upsert(
+                chain_id,
+                token,
+                boost_total=45.0,
+                boost_count=1,
+                has_profile=True,
+                discovery="community",
             )
 
         for key, count in latest_counter.items():
@@ -338,20 +353,46 @@ class HotScanner:
 
         return seeds
 
+    @staticmethod
+    def _pair_rank(pair: PairSnapshot) -> float:
+        return (
+            pair.liquidity_usd * 0.45
+            + pair.volume_h24 * 0.45
+            + pair.txns_h1 * 150.0
+            + (pair.price_change_h1 * 1500.0)
+        )
+
+    def _best_pair_from_rows(self, rows: list[dict[str, Any]]) -> dict[tuple[str, str], PairSnapshot]:
+        best: dict[tuple[str, str], PairSnapshot] = {}
+        for row in rows:
+            pair = PairSnapshot.from_api(row)
+            key = (pair.chain_id, pair.base_address)
+            existing = best.get(key)
+            if existing is None or self._pair_rank(pair) > self._pair_rank(existing):
+                best[key] = pair
+        return best
+
+    async def _prefetch_pairs_for_seeds(self, seeds: list[_SeedToken]) -> dict[tuple[str, str], PairSnapshot]:
+        by_chain: dict[str, list[str]] = defaultdict(list)
+        for seed in seeds:
+            by_chain[seed.chain_id].append(seed.token_address)
+
+        aggregated_rows: list[dict[str, Any]] = []
+        for chain_id, token_addresses in by_chain.items():
+            try:
+                rows = await self._client.get_pairs_for_tokens(chain_id, token_addresses)
+            except Exception:
+                continue
+            aggregated_rows.extend(rows)
+
+        return self._best_pair_from_rows(aggregated_rows)
+
     async def _best_pair_for_token(self, chain_id: str, token_address: str) -> PairSnapshot | None:
         rows = await self._client.get_token_pairs(chain_id, token_address)
         if not rows:
             return None
         pairs = [PairSnapshot.from_api(p) for p in rows]
-        pairs.sort(
-            key=lambda p: (
-                p.liquidity_usd * 0.45
-                + p.volume_h24 * 0.45
-                + p.txns_h1 * 150.0
-                + (p.price_change_h1 * 1500.0),
-            ),
-            reverse=True,
-        )
+        pairs.sort(key=self._pair_rank, reverse=True)
         return pairs[0]
 
     def _passes_filters(self, pair: PairSnapshot, filters: ScanFilters) -> bool:
@@ -375,13 +416,16 @@ class HotScanner:
         # Keep fast-endpoint pressure bounded for watch mode.
         target = min(max(filters.limit * 4, 12), 72)
         ordered_seeds = ordered_seeds[:target]
+        prefetch = await self._prefetch_pairs_for_seeds(ordered_seeds)
 
         semaphore = asyncio.Semaphore(20)
         results: list[HotTokenCandidate] = []
 
         async def worker(seed: _SeedToken) -> None:
             async with semaphore:
-                pair = await self._best_pair_for_token(seed.chain_id, seed.token_address)
+                pair = prefetch.get((seed.chain_id, seed.token_address))
+                if pair is None:
+                    pair = await self._best_pair_for_token(seed.chain_id, seed.token_address)
                 if not pair:
                     return
                 if not self._passes_filters(pair, filters):
