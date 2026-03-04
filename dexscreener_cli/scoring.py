@@ -104,7 +104,7 @@ def build_distribution_heuristics(candidate: HotTokenCandidate) -> dict[str, flo
 
     status = "balanced"
     if liq_to_cap < 0.03:
-        status = "concentration-risk"
+        status = "concentrated-liquidity"
     elif vol_to_liq > 5:
         status = "speculative-flow"
 

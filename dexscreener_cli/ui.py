@@ -47,6 +47,16 @@ def fmt_pct(value: float) -> str:
     return f"{sign}{value:.2f}%"
 
 
+def fmt_holders(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return f"{value}"
+
+
 def _pct_style(value: float) -> str:
     if value >= 12:
         return "bold bright_green"
@@ -91,20 +101,16 @@ def _score_style(score: float) -> str:
     return "bold white"
 
 
-def _risk_style(risk_score: float) -> str:
-    if risk_score >= 75:
-        return "bold bright_green"
-    if risk_score >= 55:
-        return "yellow"
-    return "bold bright_red"
-
-
-def _risk_badge(risk_score: float) -> Text:
-    if risk_score >= 75:
-        return Text(f"SAFE {risk_score:.0f}", style="bold bright_green")
-    if risk_score >= 55:
-        return Text(f"WATCH {risk_score:.0f}", style="bold yellow")
-    return Text(f"HIGH {risk_score:.0f}", style="bold bright_red")
+def holders_text(value: int | None) -> Text:
+    if value is None:
+        return Text("n/a", style="dim")
+    if value >= 25_000:
+        return Text(fmt_holders(value), style="bold bright_green")
+    if value >= 5_000:
+        return Text(fmt_holders(value), style="green")
+    if value >= 1_000:
+        return Text(fmt_holders(value), style="yellow")
+    return Text(fmt_holders(value), style="bright_red")
 
 
 def _flow_meter(buys: int, sells: int, width: int = 12) -> Text:
@@ -163,9 +169,13 @@ def _compact_level() -> int:
         try:
             width = int(forced_width)
         except ValueError:
-            width = shutil.get_terminal_size((160, 40)).columns
+            width = shutil.get_terminal_size((110, 40)).columns
     else:
-        width = shutil.get_terminal_size((160, 40)).columns
+        # In non-interactive captures, defaulting too wide causes heavy truncation.
+        if not sys.stdout.isatty():
+            width = shutil.get_terminal_size((110, 40)).columns
+        else:
+            width = shutil.get_terminal_size((140, 40)).columns
     if width < 100:
         return 2
     if width < 140:
@@ -219,7 +229,7 @@ def render_hot_table(
     table.add_column("24h Vol", justify="right")
     table.add_column("1h Txns", justify="right")
     table.add_column("Liquidity", justify="right")
-    table.add_column("Risk", justify="right")
+    table.add_column("Holders", justify="right")
     if not compact:
         table.add_column("Price", justify="right")
         table.add_column("MCap", justify="right")
@@ -236,10 +246,13 @@ def render_hot_table(
         signal = ", ".join(candidate.tags[:3]) if candidate.tags else candidate.discovery
         signal_text = Text(_safe_text(signal), style=_signal_style(candidate.tags, candidate.discovery))
         boost = f"{candidate.boost_total:.0f}/{candidate.boost_count}"
-        token_text = Text.assemble(
-            (f"{_safe_text(p.base_symbol)} ", "bold yellow"),
-            (f"({candidate.score:.1f})", _score_style(candidate.score)),
-        )
+        if compact:
+            token_text = Text(_safe_text(p.base_symbol), style="bold yellow")
+        else:
+            token_text = Text.assemble(
+                (f"{_safe_text(p.base_symbol)} ", "bold yellow"),
+                (f"({candidate.score:.1f})", _score_style(candidate.score)),
+            )
         age = _age_label(p.age_hours)
         age_style = "bright_cyan" if p.age_hours is not None and p.age_hours < 24 else "white"
         table.add_row(
@@ -250,7 +263,7 @@ def render_hot_table(
             Text(fmt_usd(p.volume_h24), style=vol_style),
             str(p.txns_h1),
             Text(fmt_usd(p.liquidity_usd), style=liq_style),
-            _risk_badge(candidate.analytics.risk_score),
+            holders_text(p.holders_count),
             *((
                 fmt_price(p.price_usd),
                 fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
@@ -350,7 +363,7 @@ def render_new_runners_table(
     table.add_column("24h Vol", justify="right")
     table.add_column("Tx1h", justify="right")
     table.add_column("Liq", justify="right")
-    table.add_column("Risk", justify="right")
+    table.add_column("Holders", justify="right")
     if compact_level == 0:
         table.add_column("Pulse", justify="right")
         table.add_column("Flow", no_wrap=True)
@@ -380,7 +393,7 @@ def render_new_runners_table(
                     fmt_usd(p.volume_h24),
                     str(p.txns_h1),
                     fmt_usd(p.liquidity_usd),
-                    _risk_badge(a.risk_score),
+                    holders_text(p.holders_count),
                     _pulse_meter(p),
                     _flow_meter(p.buys_h1, p.sells_h1),
                 ]
@@ -393,7 +406,7 @@ def render_new_runners_table(
                     fmt_usd(p.volume_h24),
                     str(p.txns_h1),
                     fmt_usd(p.liquidity_usd),
-                    _risk_badge(a.risk_score),
+                    holders_text(p.holders_count),
                 ]
             )
         else:
@@ -403,7 +416,7 @@ def render_new_runners_table(
                     fmt_usd(p.volume_h24),
                     str(p.txns_h1),
                     fmt_usd(p.liquidity_usd),
-                    _risk_badge(a.risk_score),
+                    holders_text(p.holders_count),
                 ]
             )
         table.add_row(*row)
@@ -429,8 +442,9 @@ def render_top_runner_cards(candidates: list[HotTokenCandidate], *, pulse: bool 
             txt.append(f"{candidate.analytics.breakout_readiness:.0f}\n", style="bright_magenta")
             txt.append("RS: ", style="dim")
             txt.append(f"{candidate.analytics.relative_strength:+.1f}\n", style="white")
-            txt.append("Risk: ", style="dim")
-            txt.append(f"{candidate.analytics.risk_score:.0f}\n", style=_risk_style(candidate.analytics.risk_score))
+            txt.append("Holders: ", style="dim")
+            txt.append_text(holders_text(p.holders_count))
+            txt.append("\n")
             txt.append("1h: ", style="dim")
             txt.append(f"{fmt_pct(p.price_change_h1)}\n", style=_pct_style(p.price_change_h1))
             txt.append("24h Vol: ", style="dim")
@@ -503,7 +517,7 @@ def render_rank_movers_table(
     table.add_column("1h", justify="right")
     table.add_column("Vol1h", justify="right")
     table.add_column("Tx1h", justify="right")
-    table.add_column("Risk", justify="right")
+    table.add_column("Holders", justify="right")
     table.add_column("Age", justify="right")
 
     for rank, candidate in enumerate(candidates[:limit], start=1):
@@ -524,7 +538,7 @@ def render_rank_movers_table(
                     Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
                     fmt_usd(p.volume_h1),
                     str(p.txns_h1),
-                    _risk_badge(candidate.analytics.risk_score),
+                    holders_text(p.holders_count),
                     _age_label(p.age_hours),
                 ]
             )
@@ -534,7 +548,7 @@ def render_rank_movers_table(
                     Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
                     fmt_usd(p.volume_h1),
                     str(p.txns_h1),
-                    _risk_badge(candidate.analytics.risk_score),
+                    holders_text(p.holders_count),
                     _age_label(p.age_hours),
                 ]
             )
@@ -548,6 +562,7 @@ def render_rank_movers_table(
 
 
 def render_search_table(pairs: list[PairSnapshot]) -> Table:
+    compact = _compact_level() >= 1
     table = Table(
         title="[bold bright_white]Search Results[/bold bright_white]",
         box=box.ROUNDED,
@@ -556,25 +571,35 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     )
     table.add_column("Chain")
     table.add_column("Token", style="bold yellow")
-    table.add_column("Pair", style="white")
     table.add_column("Price", justify="right")
-    table.add_column("24h Vol", justify="right")
-    table.add_column("1h Txns", justify="right")
-    table.add_column("Liquidity", justify="right")
+    table.add_column("Vol24", justify="right")
+    table.add_column("Tx1h", justify="right")
+    table.add_column("Liq", justify="right")
+    table.add_column("Holders", justify="right")
     table.add_column("1h", justify="right")
+    if not compact:
+        table.add_column("Pair", style="white")
     for pair in pairs:
+        if pair.price_usd >= 0.01:
+            price = f"${pair.price_usd:,.4f}"
+        else:
+            price = f"${pair.price_usd:,.6f}"
         table.add_row(
             _chain_text(pair.chain_id),
             _safe_text(pair.base_symbol),
-            _safe_text(pair.pair_address),
-            fmt_price(pair.price_usd),
+            price,
             fmt_usd(pair.volume_h24),
             str(pair.txns_h1),
             fmt_usd(pair.liquidity_usd),
+            holders_text(pair.holders_count),
             Text(fmt_pct(pair.price_change_h1), style=_pct_style(pair.price_change_h1)),
+            *((_safe_text(pair.pair_address),) if not compact else ()),
         )
     if not pairs:
-        table.add_row("-", "No matches", "-", "-", "-", "-", "-", "-")
+        if compact:
+            table.add_row("-", "No matches", "-", "-", "-", "-", "-", "-")
+        else:
+            table.add_row("-", "No matches", "-", "-", "-", "-", "-", "-", "-")
     return table
 
 
@@ -611,6 +636,11 @@ def render_pair_detail(pair: PairSnapshot, boost_total: float = 0.0, boost_count
     content.append(" | MCap/FDV: ", style="dim")
     content.append(fmt_usd(mcap), style="white")
     content.append("\n")
+    content.append("Holders: ", style="dim")
+    content.append_text(holders_text(pair.holders_count))
+    if pair.holders_source:
+        content.append(f" ({pair.holders_source})", style="dim")
+    content.append("\n")
     if boost_total or boost_count:
         content.append(f"Boosts observed: total={boost_total:.0f}, count={boost_count}\n", style="bright_yellow")
     if pair.pair_url:
@@ -627,8 +657,15 @@ def render_pair_detail(pair: PairSnapshot, boost_total: float = 0.0, boost_count
 def render_distribution_panel(candidate: HotTokenCandidate) -> Panel:
     heuristics = build_distribution_heuristics(candidate)
     txt = Text()
-    txt.append("Dexscreener API does not expose holder distribution in public endpoints.\n", style="bold yellow")
-    txt.append("Proxy concentration signals from market structure:\n", style="bright_white")
+    if candidate.pair.holders_count is not None:
+        txt.append("Observed holders: ", style="dim")
+        txt.append_text(holders_text(candidate.pair.holders_count))
+        if candidate.pair.holders_source:
+            txt.append(f" ({candidate.pair.holders_source})", style="dim")
+        txt.append("\n")
+    else:
+        txt.append("Holder count unavailable for this token/chain via public adapters.\n", style="bold yellow")
+    txt.append("Market-structure concentration signals:\n", style="bright_white")
     txt.append(
         f"- liquidity/market_cap: {heuristics['liquidity_to_market_cap']}\n"
         f"- volume/liquidity (24h): {heuristics['volume_to_liquidity_24h']}\n"
@@ -696,21 +733,21 @@ def render_flow_panel(candidates: list[HotTokenCandidate]) -> Panel:
         for c in candidates
     ) / max(len(candidates), 1)
 
-    risk_flags: list[str] = []
+    market_flags: list[str] = []
     if total_liq > 0 and (total_vol / total_liq) > 6:
-        risk_flags.append("speculative-flow")
+        market_flags.append("speculative-flow")
     if avg_imbalance < -0.25:
-        risk_flags.append("sell-pressure")
+        market_flags.append("sell-pressure")
     if avg_h1 > 20:
-        risk_flags.append("high-volatility")
-    if not risk_flags:
-        risk_flags.append("balanced")
+        market_flags.append("high-volatility")
+    if not market_flags:
+        market_flags.append("balanced")
 
-    regime = "risk-on" if avg_h1 > 10 and avg_imbalance > 0 else "risk-off" if avg_imbalance < -0.2 else "mixed"
+    regime = "trend-up" if avg_h1 > 10 and avg_imbalance > 0 else "trend-down" if avg_imbalance < -0.2 else "mixed"
     flag_style = "bold magenta"
-    if "sell-pressure" in risk_flags:
+    if "sell-pressure" in market_flags:
         flag_style = "bold bright_red"
-    elif "balanced" in risk_flags:
+    elif "balanced" in market_flags:
         flag_style = "bold bright_green"
 
     text = Text()
@@ -724,7 +761,7 @@ def render_flow_panel(candidates: list[HotTokenCandidate]) -> Panel:
     text.append(f"{avg_imbalance:+.2f}\n", style="bold white")
     text.append("Regime: ", style="dim")
     text.append(f"{regime}\n", style="bold bright_white")
-    text.append(f"Flags: {', '.join(risk_flags)}", style=flag_style)
+    text.append(f"Flags: {', '.join(market_flags)}", style=flag_style)
     return Panel(
         text,
         title="[bold bright_white]Flow Summary[/bold bright_white]",
