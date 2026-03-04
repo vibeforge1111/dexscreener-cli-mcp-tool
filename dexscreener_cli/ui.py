@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime
+import os
+import shutil
 import sys
 
 from rich import box
@@ -141,6 +143,28 @@ def _signal_style(tags: list[str], discovery: str) -> str:
     return "white"
 
 
+def _compact_level() -> int:
+    mode = os.environ.get("DS_TABLE_MODE", "").strip().lower()
+    if mode == "compact":
+        return 2
+    if mode == "full":
+        return 0
+
+    forced_width = os.environ.get("DS_TABLE_WIDTH", "").strip()
+    if forced_width:
+        try:
+            width = int(forced_width)
+        except ValueError:
+            width = shutil.get_terminal_size((160, 40)).columns
+    else:
+        width = shutil.get_terminal_size((160, 40)).columns
+    if width < 100:
+        return 2
+    if width < 140:
+        return 1
+    return 0
+
+
 def build_header() -> Panel:
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     title = Text("Dexscreener CLI MCP Tool", style="bold bright_cyan")
@@ -161,6 +185,8 @@ def render_hot_table(
     min_volume_h24_usd: float,
     min_txns_h1: int,
 ) -> Table:
+    compact_level = _compact_level()
+    compact = compact_level >= 1
     table = Table(
         title=(
             f"[bold bright_white]Hot Runner Scan[/bold bright_white]  "
@@ -178,17 +204,18 @@ def render_hot_table(
     table.add_column("#", justify="right", style="bold")
     table.add_column("Chain")
     table.add_column("Token", style="bold yellow")
-    table.add_column("Price", justify="right")
     table.add_column("1h", justify="right")
     table.add_column("24h Vol", justify="right")
     table.add_column("1h Txns", justify="right")
     table.add_column("Liquidity", justify="right")
-    table.add_column("MCap", justify="right")
-    table.add_column("Boost", justify="right")
     table.add_column("Risk", justify="right")
-    table.add_column("Flow", no_wrap=True)
-    table.add_column("Age", justify="right")
-    table.add_column("Signal")
+    if not compact:
+        table.add_column("Price", justify="right")
+        table.add_column("MCap", justify="right")
+        table.add_column("Boost", justify="right")
+        table.add_column("Flow", no_wrap=True)
+        table.add_column("Age", justify="right")
+        table.add_column("Signal")
 
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
@@ -208,20 +235,25 @@ def render_hot_table(
             str(i),
             _chain_text(p.chain_id),
             token_text,
-            fmt_price(p.price_usd),
             h1,
             Text(fmt_usd(p.volume_h24), style=vol_style),
             str(p.txns_h1),
             Text(fmt_usd(p.liquidity_usd), style=liq_style),
-            fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
-            boost,
             Text(f"{candidate.analytics.risk_score:.0f}", style=_risk_style(candidate.analytics.risk_score)),
-            _flow_meter(p.buys_h1, p.sells_h1),
-            Text(age, style=age_style),
-            signal_text,
+            *((
+                fmt_price(p.price_usd),
+                fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
+                boost,
+                _flow_meter(p.buys_h1, p.sells_h1),
+                Text(age, style=age_style),
+                signal_text,
+            ) if not compact else ()),
         )
     if not candidates:
-        table.add_row("-", "-", "No candidates matched current filters", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+        if compact:
+            table.add_row("-", "-", "No candidates matched current filters", "-", "-", "-", "-", "-")
+        else:
+            table.add_row("-", "-", "No candidates matched current filters", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
     return table
 
 
@@ -277,6 +309,7 @@ def render_new_runners_table(
     limit: int,
     selected_index: int | None = None,
 ) -> Table:
+    compact_level = _compact_level()
     table = Table(
         title=(
             f"[bold bright_white]Best New Runners[/bold bright_white]  "
@@ -290,17 +323,20 @@ def render_new_runners_table(
     )
     table.add_column("#", justify="right")
     table.add_column("Token", style="bold yellow")
-    table.add_column("Score", justify="right")
-    table.add_column("Ready", justify="right")
-    table.add_column("RS", justify="right")
+    if compact_level == 0:
+        table.add_column("Score", justify="right")
+        table.add_column("Ready", justify="right")
+        table.add_column("RS", justify="right")
+    if compact_level <= 1:
+        table.add_column("Age", justify="right")
     table.add_column("1h", justify="right")
     table.add_column("24h Vol", justify="right")
     table.add_column("Tx1h", justify="right")
     table.add_column("Liq", justify="right")
     table.add_column("Risk", justify="right")
-    table.add_column("Age", justify="right")
-    table.add_column("Pulse", justify="right")
-    table.add_column("Flow", no_wrap=True)
+    if compact_level == 0:
+        table.add_column("Pulse", justify="right")
+        table.add_column("Flow", no_wrap=True)
 
     for i, candidate in enumerate(candidates[:limit], start=1):
         p = candidate.pair
@@ -313,36 +349,52 @@ def render_new_runners_table(
         rs_style = "bold bright_green" if a.relative_strength >= 8 else "bold bright_red" if a.relative_strength <= -8 else "white"
         readiness_style = "bold bright_green" if a.breakout_readiness >= 70 else "yellow" if a.breakout_readiness >= 55 else "dim"
         table.add_row(
-            str(i),
-            Text(_safe_text(p.base_symbol), style=token_style),
-            score,
-            Text(f"{a.breakout_readiness:.0f}", style=readiness_style),
-            Text(f"{a.relative_strength:+.1f}", style=rs_style),
-            Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
-            fmt_usd(p.volume_h24),
-            str(p.txns_h1),
-            fmt_usd(p.liquidity_usd),
-            Text(f"{a.risk_score:.0f}", style=_risk_style(a.risk_score)),
-            age,
-            _pulse_meter(p),
-            _flow_meter(p.buys_h1, p.sells_h1),
+            *(
+                (
+                    str(i),
+                    Text(_safe_text(p.base_symbol), style=token_style),
+                    score,
+                    Text(f"{a.breakout_readiness:.0f}", style=readiness_style),
+                    Text(f"{a.relative_strength:+.1f}", style=rs_style),
+                    age,
+                    Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
+                    fmt_usd(p.volume_h24),
+                    str(p.txns_h1),
+                    fmt_usd(p.liquidity_usd),
+                    Text(f"{a.risk_score:.0f}", style=_risk_style(a.risk_score)),
+                    _pulse_meter(p),
+                    _flow_meter(p.buys_h1, p.sells_h1),
+                )
+                if compact_level == 0
+                else (
+                    str(i),
+                    Text(_safe_text(p.base_symbol), style=token_style),
+                    age,
+                    Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
+                    fmt_usd(p.volume_h24),
+                    str(p.txns_h1),
+                    fmt_usd(p.liquidity_usd),
+                    Text(f"{a.risk_score:.0f}", style=_risk_style(a.risk_score)),
+                )
+                if compact_level == 1
+                else (
+                    str(i),
+                    Text(_safe_text(p.base_symbol), style=token_style),
+                    Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
+                    fmt_usd(p.volume_h24),
+                    str(p.txns_h1),
+                    fmt_usd(p.liquidity_usd),
+                    Text(f"{a.risk_score:.0f}", style=_risk_style(a.risk_score)),
+                )
+            )
         )
     if not candidates:
-        table.add_row(
-            "-",
-            "No fresh runners found",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-            "-",
-        )
+        if compact_level == 0:
+            table.add_row("-", "No fresh runners found", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+        elif compact_level == 1:
+            table.add_row("-", "No fresh runners found", "-", "-", "-", "-", "-", "-")
+        else:
+            table.add_row("-", "No fresh runners found", "-", "-", "-", "-", "-")
     return table
 
 
@@ -415,6 +467,7 @@ def render_rank_movers_table(
     previous_ranks: dict[tuple[str, str], int],
     limit: int,
 ) -> Table:
+    compact_level = _compact_level()
     table = Table(
         title="[bold bright_white]Rank Movers[/bold bright_white]",
         box=box.ROUNDED,
@@ -424,9 +477,10 @@ def render_rank_movers_table(
     table.add_column("Rank", justify="right")
     table.add_column("Move", justify="right")
     table.add_column("Token", style="bold yellow")
-    table.add_column("Score", justify="right")
-    table.add_column("Ready", justify="right")
-    table.add_column("RS", justify="right")
+    if compact_level == 0:
+        table.add_column("Score", justify="right")
+        table.add_column("Ready", justify="right")
+        table.add_column("RS", justify="right")
     table.add_column("1h", justify="right")
     table.add_column("Vol1h", justify="right")
     table.add_column("Tx1h", justify="right")
@@ -436,21 +490,39 @@ def render_rank_movers_table(
     for rank, candidate in enumerate(candidates[:limit], start=1):
         p = candidate.pair
         table.add_row(
-            str(rank),
-            _move_text(key=candidate.key, rank=rank, previous_ranks=previous_ranks),
-            _safe_text(p.base_symbol),
-            Text(f"{candidate.score:.1f}", style=_score_style(candidate.score)),
-            Text(f"{candidate.analytics.breakout_readiness:.0f}", style="bright_magenta"),
-            Text(f"{candidate.analytics.relative_strength:+.1f}", style="white"),
-            Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
-            fmt_usd(p.volume_h1),
-            str(p.txns_h1),
-            Text(f"{candidate.analytics.risk_score:.0f}", style=_risk_style(candidate.analytics.risk_score)),
-            _age_label(p.age_hours),
+            *(
+                (
+                    str(rank),
+                    _move_text(key=candidate.key, rank=rank, previous_ranks=previous_ranks),
+                    _safe_text(p.base_symbol),
+                    Text(f"{candidate.score:.1f}", style=_score_style(candidate.score)),
+                    Text(f"{candidate.analytics.breakout_readiness:.0f}", style="bright_magenta"),
+                    Text(f"{candidate.analytics.relative_strength:+.1f}", style="white"),
+                    Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
+                    fmt_usd(p.volume_h1),
+                    str(p.txns_h1),
+                    Text(f"{candidate.analytics.risk_score:.0f}", style=_risk_style(candidate.analytics.risk_score)),
+                    _age_label(p.age_hours),
+                )
+                if compact_level == 0
+                else (
+                    str(rank),
+                    _move_text(key=candidate.key, rank=rank, previous_ranks=previous_ranks),
+                    _safe_text(p.base_symbol),
+                    Text(fmt_pct(p.price_change_h1), style=_pct_style(p.price_change_h1)),
+                    fmt_usd(p.volume_h1),
+                    str(p.txns_h1),
+                    Text(f"{candidate.analytics.risk_score:.0f}", style=_risk_style(candidate.analytics.risk_score)),
+                    _age_label(p.age_hours),
+                )
+            )
         )
 
     if not candidates:
-        table.add_row("-", "-", "No movers yet", "-", "-", "-", "-", "-", "-", "-", "-")
+        if compact_level == 0:
+            table.add_row("-", "-", "No movers yet", "-", "-", "-", "-", "-", "-", "-", "-")
+        else:
+            table.add_row("-", "-", "No movers yet", "-", "-", "-", "-", "-")
     return table
 
 

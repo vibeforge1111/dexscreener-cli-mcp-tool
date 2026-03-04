@@ -62,6 +62,17 @@ One-command local showcase (runs alpha drops, watch demo, and top-new):
 powershell -ExecutionPolicy Bypass -File .\showcase.ps1
 ```
 
+If your terminal is narrow and tables truncate with `...`, force compact layout:
+```bash
+$env:DS_TABLE_MODE="compact"   # PowerShell
+ds alpha-drops --chains base,solana --profile balanced
+```
+
+Optional width override for auto layout:
+```bash
+$env:DS_TABLE_WIDTH="120"
+```
+
 One-shot scan:
 ```bash
 ds hot --chains solana,base --limit 20

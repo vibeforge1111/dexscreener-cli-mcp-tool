@@ -1,6 +1,8 @@
 param(
     [ValidateSet("all", "alpha", "watch", "topnew")]
     [string]$Only = "all",
+    [ValidateSet("auto", "compact", "full")]
+    [string]$TableMode = "compact",
     [switch]$NoPause
 )
 
@@ -12,6 +14,11 @@ try {
     $env:PYTHONIOENCODING = "utf-8"
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
     chcp 65001 | Out-Null
+    if ($TableMode -eq "auto") {
+        Remove-Item Env:DS_TABLE_MODE -ErrorAction SilentlyContinue
+    } else {
+        $env:DS_TABLE_MODE = $TableMode
+    }
 
     function Wait-IfNeeded([string]$message) {
         if (-not $NoPause) {
