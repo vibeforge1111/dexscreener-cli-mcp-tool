@@ -56,6 +56,11 @@ pip install -e .
 ```
 
 ## CLI usage
+One-command local showcase (runs alpha drops, watch demo, and top-new):
+```bash
+powershell -ExecutionPolicy Bypass -File .\showcase.ps1
+```
+
 One-shot scan:
 ```bash
 ds hot --chains solana,base --limit 20
