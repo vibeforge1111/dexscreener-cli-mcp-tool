@@ -46,6 +46,7 @@ This tool shows **proxy concentration signals** (liquidity-to-market-cap, volume
 4. [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
 5. [Daemon Deployment](docs/DAEMON_DEPLOYMENT.md)
 6. [Desk Alpha Opinions](docs/DESK_ALPHA_OPINIONS.md)
+7. [Ship Priority Status](docs/SHIP_PRIORITY_STATUS.md)
 
 ## Install
 ```bash
@@ -95,6 +96,7 @@ Higher-signal profile (quality gates + sort by readiness):
 ```bash
 ds new-runners \
   --chain base \
+  --profile balanced \
   --limit 10 \
   --max-age-hours 24 \
   --sort-by readiness \
@@ -108,17 +110,28 @@ ds new-runners \
 
 Realtime alpha-drop board (Base + Solana):
 ```bash
-ds alpha-drops --chains base,solana --limit 10
+ds alpha-drops --chains base,solana --profile balanced --limit 10
 ```
 
 Realtime alpha-drop watch with notifications:
 ```bash
 ds alpha-drops-watch \
   --chains base,solana \
+  --profile balanced \
   --interval 6 \
   --alert-cooldown-seconds 300 \
   --alert-max-per-hour 8 \
   --discord-webhook-url https://discord.com/api/webhooks/...
+```
+
+Show profile thresholds by chain:
+```bash
+ds profiles --chains base,solana
+```
+
+Inspect runtime rate-budget stats:
+```bash
+ds rate-stats --json
 ```
 
 Live new-runner rotation board (cards + rank movers):
@@ -231,16 +244,21 @@ Exposed tools:
 1. `scan_hot_tokens`
 2. `search_pairs`
 3. `inspect_token`
-4. `save_preset`
-5. `list_presets`
-6. `create_task`
-7. `list_tasks`
-8. `run_task_scan`
-9. `run_due_tasks`
-10. `test_task_alert`
-11. `list_task_runs`
-12. `export_state_bundle`
-13. `import_state_bundle`
+4. `get_rate_budget_stats`
+5. `save_preset`
+6. `list_presets`
+7. `create_task`
+8. `list_tasks`
+9. `run_task_scan`
+10. `run_due_tasks`
+11. `test_task_alert`
+12. `list_task_runs`
+13. `export_state_bundle`
+14. `import_state_bundle`
+
+MCP resources and prompts:
+1. resources: `dexscreener://profiles`, `dexscreener://presets`, `dexscreener://tasks`
+2. prompts: `alpha_scan_plan`, `runner_triage`
 
 ## Recommended default profile
 For spotting new runners with manageable noise:

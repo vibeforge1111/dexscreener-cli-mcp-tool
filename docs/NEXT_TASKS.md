@@ -76,3 +76,33 @@ Status key: `pending` | `in_progress` | `done`
 - Acceptance:
   - Scanner ingests bounded search-based seeds.
   - `top-new` can filter by 24h txns and explains 1h `N/A` via recent inactivity.
+
+## 9) Ingestion V2 and Rate Budgeting
+- Status: `done`
+- Scope:
+  - Add adaptive 429 cooldowns with runtime budget stats.
+  - Add community takeover seed ingestion.
+  - Add batched `/tokens/v1` prefetch to reduce per-token endpoint pressure.
+- Acceptance:
+  - Client exposes runtime stats (`requests`, `429`, retries, bucket waits).
+  - Scanner includes community signals and still runs within Dex rate envelope.
+
+## 10) Explainability + Risk Firewall
+- Status: `done`
+- Scope:
+  - Persist weighted score components for every candidate.
+  - Add risk score/flags and risk penalty to final ranking.
+  - Surface risk in runner and mover tables.
+- Acceptance:
+  - JSON outputs include score component breakdown and risk metadata.
+  - UI shows risk column for fast triage.
+
+## 11) Chain-Aware Profiles + MCP Surfaces
+- Status: `done`
+- Scope:
+  - Add `strict/balanced/discovery` chain-aware profile system.
+  - Apply profiles to runner/alpha/top-new commands.
+  - Add MCP resources/prompts for profiles/state and operator workflows.
+- Acceptance:
+  - `ds profiles` prints profile thresholds by chain.
+  - MCP exposes resource and prompt surfaces in addition to tools.
