@@ -82,12 +82,11 @@ That's it. The setup wizard saves your choices and auto-loads them on every scan
 
 ## Commands
 
-### Scanning
+### One-Shot Scans
 
 | Command | What it does |
 |---------|-------------|
 | `ds hot` | Scan hot tokens across your configured chains |
-| `ds watch` | Live auto-refreshing dashboard |
 | `ds search <query>` | Search tokens by name, symbol, or address |
 | `ds top-new` | Top new tokens by 24h volume |
 | `ds new-runners` | Fresh token runners with momentum scoring |
@@ -95,20 +94,50 @@ That's it. The setup wizard saves your choices and auto-loads them on every scan
 | `ds ai-top` | AI-themed token leaderboard |
 | `ds inspect <address>` | Deep-dive on a specific token |
 
-### Configuration
+### Real-Time Live Dashboards
+
+These run continuously and auto-refresh every few seconds. Press `Ctrl+C` to stop.
 
 | Command | What it does |
 |---------|-------------|
-| `ds setup` | Interactive onboarding wizard |
+| `ds watch` | Live hot runner board - refreshes every 7s |
+| `ds new-runners-watch` | Live new runner tracker with keyboard chain switching |
+| `ds alpha-drops-watch` | Live alpha drop scanner with built-in alerts |
+
+All live modes support `--interval` to set refresh speed and `--limit` to control how many tokens show.
+
+### Custom Scan Profiles
+
+Create your own scan profiles with any combination of chains and filters. They persist across sessions.
+
+```bash
+# Create a custom profile
+ds preset save my-degen --chains solana,base --limit 15 --min-liquidity-usd 8000 --min-txns-h1 5
+
+# Use it in any scan
+ds hot --preset my-degen
+ds watch --preset my-degen
+
+# List / inspect / delete profiles
+ds preset list
+ds preset show my-degen
+ds preset delete my-degen
+```
+
+The 3 built-in profiles (strict / balanced / discovery) are always available. Your custom profiles sit on top.
+
+### Setup & Maintenance
+
+| Command | What it does |
+|---------|-------------|
+| `ds setup` | Interactive wizard - builds a "default" profile from 5 questions |
 | `ds doctor` | Diagnose issues and verify your setup |
 | `ds update` | Pull latest code and reinstall |
-| `ds profiles` | Show filter thresholds per profile |
-| `ds preset save <name>` | Save current filters as a named preset |
-| `ds preset list` | List all saved presets |
-| `ds preset show <name>` | Show preset details as JSON |
-| `ds preset delete <name>` | Delete a preset |
+| `ds profiles` | Show built-in filter thresholds per chain |
 
 ### Tasks & Alerts
+
+Set up automated scans that run on a schedule and alert you via Discord, Telegram, or webhooks.
 
 | Command | What it does |
 |---------|-------------|
@@ -137,23 +166,34 @@ ds search pepe --json
 ds hot --chains solana --limit 10
 ```
 
-**Multi-chain live dashboard, refresh every 7 seconds:**
+**Live dashboard, refresh every 5 seconds:**
 ```bash
-ds watch --chains solana,base,ethereum --interval 7
+ds watch --chains solana,base --interval 5
+```
+
+**Live new runner tracker on Solana:**
+```bash
+ds new-runners-watch --chain solana --interval 6
+```
+
+**Live alpha drops with Discord alerts:**
+```bash
+ds alpha-drops-watch --chains solana,base --discord-webhook-url https://discord.com/api/webhooks/...
 ```
 
 **Discovery mode (loose filters to find more tokens):**
 ```bash
-ds hot --chains solana --limit 20 --min-liquidity-usd 10000 --min-volume-h24-usd 10000 --min-txns-h1 5
+ds hot --chains solana --limit 20 --min-liquidity-usd 8000 --min-volume-h24-usd 10000 --min-txns-h1 5
 ```
 
-**Use a saved preset:**
+**Create and use a custom profile:**
 ```bash
-ds preset save degen --chains solana,base --limit 15 --min-liquidity-usd 10000
+ds preset save degen --chains solana,base --limit 15 --min-liquidity-usd 8000
 ds hot --preset degen
+ds watch --preset degen
 ```
 
-**Set up Discord alerts:**
+**Set up scheduled Discord alerts:**
 ```bash
 ds task create scout --preset degen --interval-seconds 60
 ds task configure scout --discord-webhook-url https://discord.com/api/webhooks/...
