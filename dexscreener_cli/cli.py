@@ -36,6 +36,8 @@ from .ui import (
     fmt_pct,
     fmt_usd,
     holders_text,
+    render_chain_heat_table,
+    render_flow_panel,
     render_inspect_view,
     render_hot_table,
     render_rank_movers_table,
