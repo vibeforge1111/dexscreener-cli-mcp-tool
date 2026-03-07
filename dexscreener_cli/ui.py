@@ -419,8 +419,6 @@ def build_header() -> Panel:
     content = Text()
     content.append("DEX SCANNER", style=f"bold {C_WHITE}")
     content.append("\n")
-
-    content.append(_safe_text(SEPARATOR * 30) + "\n", style=C_BORDER)
     content.append("Live Signal Terminal", style=C_LABEL)
     content.append(_safe_text(f"  {DOT}  "), style=C_BORDER)
     content.append(now, style=C_DIM)
@@ -443,7 +441,7 @@ def render_scan_summary(candidates: list[HotTokenCandidate]) -> Panel:
     if not candidates:
         return Panel(
             Text("Waiting for scan data...", style=C_DIM),
-            title=f"[{C_LABEL}]{_safe_text(SEPARATOR * 3)} Performance {_safe_text(SEPARATOR * 3)}[/{C_LABEL}]",
+            title=f"[bold {C_TEXT}]Performance[/bold {C_TEXT}]",
             border_style=C_BORDER,
             box=box.HEAVY,
         )
@@ -526,7 +524,7 @@ def render_scan_summary(candidates: list[HotTokenCandidate]) -> Panel:
 
     return Panel(
         grid,
-        title=f"[{C_LABEL}]{_safe_text(SEPARATOR * 3)} Performance {_safe_text(SEPARATOR * 3)}[/{C_LABEL}]",
+        title=f"[bold {C_TEXT}]Performance[/bold {C_TEXT}]",
         border_style=C_BORDER,
         box=box.HEAVY,
         padding=(0, 1),
@@ -615,7 +613,7 @@ def render_hot_table(
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
         show_edge=True,
-        row_styles=["", C_DIM],
+        row_styles=["", "on #1e2029"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -776,7 +774,7 @@ def render_new_runners_table(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", C_DIM],
+        row_styles=["", "on #1e2029"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -995,7 +993,7 @@ def render_rank_movers_table(
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Rank Movers[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", C_DIM],
+        row_styles=["", "on #1e2029"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -1097,36 +1095,28 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Search Results[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", C_DIM],
+        row_styles=["", "on #1e2029"],
         border_style=C_BORDER,
         title_style="",
     )
-    table.add_column("Chain", min_width=6)
+    table.add_column("Chain", min_width=5)
     table.add_column("Token", style=f"bold {C_GOLD}")
-    table.add_column("Price", justify="right")
-    table.add_column("Vol24", justify="right")
-    table.add_column("Tx1h", justify="right")
-    table.add_column("Liq", justify="right")
-    table.add_column("Holders", justify="right")
     table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h", justify="right", min_width=10)
+    table.add_column("Vol 24h", justify="right")
+    table.add_column("Liq", justify="right")
+    table.add_column("Holders", justify="right")
     table.add_column("Trust", min_width=10)
 
     for pair in pairs:
-        if pair.price_usd >= 0.01:
-            price = f"${pair.price_usd:,.4f}"
-        else:
-            price = f"${pair.price_usd:,.6f}"
         table.add_row(
             _chain_text(pair.chain_id),
             Text(_safe_text(pair.base_symbol), style=f"bold {C_GOLD}"),
-            price,
-            fmt_usd(pair.volume_h24),
-            str(pair.txns_h1),
-            fmt_usd(pair.liquidity_usd),
-            holders_text(pair.holders_count),
             _momentum_text(pair.price_change_h1),
             _momentum_text(pair.price_change_h24),
+            fmt_usd(pair.volume_h24),
+            fmt_usd(pair.liquidity_usd),
+            holders_text(pair.holders_count),
             _trust_badge(pair),
         )
     if not pairs:
@@ -1316,7 +1306,7 @@ def render_chain_heat_table(candidates: list[HotTokenCandidate]) -> Table:
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Chain Heat[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         expand=True,
-        row_styles=["", C_DIM],
+        row_styles=["", "on #1e2029"],
         border_style=C_BORDER,
         header_style=f"bold {C_TEXT}",
         title_style="",

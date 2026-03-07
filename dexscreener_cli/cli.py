@@ -35,9 +35,7 @@ from .ui import (
     fmt_pct,
     fmt_usd,
     holders_text,
-    render_chain_heat_table,
     render_distribution_panel,
-    render_flow_panel,
     render_hot_table,
     render_rank_movers_table,
     render_new_runner_spotlight,
@@ -166,14 +164,14 @@ def _as_int(value: object, default: int = 0) -> int:
 
 def _pct_text(value: float) -> Text:
     if value >= 10:
-        return Text(fmt_pct(value), style="bold bright_green")
+        return Text(fmt_pct(value), style="bold #4ade80")
     if value > 0:
-        return Text(fmt_pct(value), style="green")
+        return Text(fmt_pct(value), style="#4ade80")
     if value <= -10:
-        return Text(fmt_pct(value), style="bold bright_red")
+        return Text(fmt_pct(value), style="bold #f87171")
     if value < 0:
-        return Text(fmt_pct(value), style="red")
-    return Text(fmt_pct(value), style="white")
+        return Text(fmt_pct(value), style="#f87171")
+    return Text(fmt_pct(value), style="#4b5563")
 
 
 def _pct_or_na(value: float, *, txns_h1: int) -> Text:
@@ -645,29 +643,31 @@ def _render_ai_board(
     min_txns_h1: int,
 ) -> None:
     compact = _terminal_width() < 140
+    chain_lbl = chain.upper()[:4]
     table = Table(
         title=(
-            f"[bold bright_white]Top AI Tokens[/bold bright_white]  "
-            f"[cyan]chain={chain}[/cyan]  "
-            f"[green]liq>={fmt_usd(min_liquidity_usd)}[/green]  "
-            f"[green]vol24>={fmt_usd(min_volume_h24_usd)}[/green]  "
-            f"[magenta]tx1h>={min_txns_h1}[/magenta]"
+            f"[bold #e5e7eb]Top AI Tokens[/bold #e5e7eb]  "
+            f"[#6b7280]{chain_lbl}  liq>={fmt_usd(min_liquidity_usd)}  "
+            f"vol24>={fmt_usd(min_volume_h24_usd)}  "
+            f"tx1h>={min_txns_h1}[/#6b7280]"
         ),
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        row_styles=["", "on #1e2029"],
+        border_style="#3a3d4a",
+        title_style="",
     )
-    table.add_column("#", justify="right")
-    table.add_column("Token", style="bold yellow")
-    table.add_column("1h", justify="right")
+    table.add_column("#", justify="right", width=3)
+    table.add_column("Token", style="bold #fbbf24", min_width=8)
+    table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h Vol", justify="right")
-    table.add_column("1h Txns", justify="right")
+    table.add_column("Txns", justify="right")
     table.add_column("Liquidity", justify="right")
     table.add_column("Holders", justify="right")
     if not compact:
         table.add_column("Price", justify="right")
-        table.add_column("24h", justify="right")
-        table.add_column("Dex")
+        table.add_column("24h", justify="right", min_width=10)
+        table.add_column("Dex", style="#4b5563")
 
     for i, row in enumerate(rows, start=1):
         symbol = str(row.get("symbol", "?"))
@@ -683,9 +683,9 @@ def _render_ai_board(
             str(i),
             symbol,
             _pct_or_na(h1, txns_h1=tx1h),
-            Text(fmt_usd(vol24), style="bright_cyan" if vol24 >= 100_000 else "cyan"),
+            fmt_usd(vol24),
             str(tx1h),
-            Text(fmt_usd(liq), style="green" if liq >= 50_000 else "yellow"),
+            fmt_usd(liq),
             holders_text(holders_count if holders_count >= 0 else None),
             *((f"${price:,.8f}" if price < 0.01 else f"${price:,.6f}", _pct_text(h24), dex) if not compact else ()),
         )
@@ -705,17 +705,18 @@ def _render_ai_board(
         if rows
         else 0.0
     )
+    summary_txt = Text()
+    summary_txt.append(f"Tokens: {len(rows)}", style="#d1d5db")
+    summary_txt.append(f"    24h Vol: {fmt_usd(total_vol)}", style="#d1d5db")
+    summary_txt.append(f"    Liq: {fmt_usd(total_liq)}", style="#d1d5db")
+    summary_txt.append(f"    Avg Holders: {holder_hint}", style="#d1d5db")
+    summary_txt.append(f"    Avg 1h: {fmt_pct(avg_h1)}", style="#4ade80" if avg_h1 > 0 else "#f87171" if avg_h1 < 0 else "#4b5563")
     summary = Panel(
-        Text(
-            f"Rows: {len(rows)}\n"
-            f"24h volume sum: {fmt_usd(total_vol)}\n"
-            f"Liquidity sum: {fmt_usd(total_liq)}\n"
-            f"Avg holders: {holder_hint}\n"
-            f"Average 1h move: {fmt_pct(avg_h1)}"
-        ),
-        title="[bold bright_white]AI Market Snapshot[/bold bright_white]",
-        border_style="bright_blue",
-        box=box.ROUNDED,
+        summary_txt,
+        title="[bold #e5e7eb]AI Market Snapshot[/bold #e5e7eb]",
+        border_style="#3a3d4a",
+        box=box.HEAVY,
+        padding=(0, 1),
     )
     console.print(build_header())
     console.print(table)
@@ -744,7 +745,7 @@ def _render_new_launches_board(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style="bold #e5e7eb",
-        row_styles=["", "#4b5563"],
+        row_styles=["", "on #1e2029"],
         border_style="#3a3d4a",
         title_style="",
     )
@@ -1219,8 +1220,8 @@ def alpha_drops_watch(
                             f"{status_message}\n"
                             "Ctrl+C to exit"
                         ),
-                        border_style="dim",
-                        box=box.ROUNDED,
+                        border_style="#2a2d3a",
+                        box=box.HEAVY,
                     ),
                 )
                 live.update(view)
@@ -1640,10 +1641,12 @@ def profiles(
     """Show chain-aware threshold profiles used by runner/new-coin scanners."""
     selected_chains = _parse_chains(chains)
     table = Table(
-        title="[bold bright_white]Chain-Aware Profiles[/bold bright_white]",
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        title="[bold #e5e7eb]Chain-Aware Profiles[/bold #e5e7eb]",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        border_style="#3a3d4a",
+        title_style="",
+        row_styles=["", "on #1e2029"],
     )
     table.add_column("Profile")
     table.add_column("Chains")
@@ -1671,8 +1674,8 @@ def profiles(
             "Explicit CLI thresholds always override profile-derived values.\n"
             "Use profile=discovery for wider net, strict for higher-quality runners."
         ),
-        border_style="dim",
-        box=box.ROUNDED,
+        border_style="#2a2d3a",
+        box=box.HEAVY,
     )
     console.print(build_header())
     console.print(table)
@@ -1708,10 +1711,12 @@ def rate_stats(
         return
 
     table = Table(
-        title="[bold bright_white]Rate Budget Stats[/bold bright_white]",
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        title="[bold #e5e7eb]Rate Budget Stats[/bold #e5e7eb]",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        border_style="#3a3d4a",
+        title_style="",
+        row_styles=["", "on #1e2029"],
     )
     table.add_column("Metric")
     table.add_column("Value", justify="right")
@@ -1767,10 +1772,12 @@ def preset_list() -> None:
         console.print("[yellow]No presets found.[/yellow]")
         return
     table = Table(
-        title="[bold bright_white]Presets[/bold bright_white]",
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        title="[bold #e5e7eb]Presets[/bold #e5e7eb]",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        border_style="#3a3d4a",
+        title_style="",
+        row_styles=["", "on #1e2029"],
     )
     table.add_column("Name", style="bold cyan")
     table.add_column("Chains")
@@ -1903,10 +1910,12 @@ def task_list(
         console.print("[yellow]No tasks found.[/yellow]")
         return
     table = Table(
-        title="[bold bright_white]Scan Tasks[/bold bright_white]",
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        title="[bold #e5e7eb]Scan Tasks[/bold #e5e7eb]",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        border_style="#3a3d4a",
+        title_style="",
+        row_styles=["", "on #1e2029"],
     )
     table.add_column("ID", style="bold cyan")
     table.add_column("Name")
@@ -2236,10 +2245,12 @@ def task_runs(
         console.print("[yellow]No run history found.[/yellow]")
         return
     table = Table(
-        title="[bold bright_white]Task Run History[/bold bright_white]",
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+        title="[bold #e5e7eb]Task Run History[/bold #e5e7eb]",
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        border_style="#3a3d4a",
+        title_style="",
+        row_styles=["", "on #1e2029"],
     )
     table.add_column("Finished", style="dim")
     table.add_column("Task")
