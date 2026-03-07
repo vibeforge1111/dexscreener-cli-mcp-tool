@@ -1079,12 +1079,23 @@ def setup() -> None:
 # ── Update command ────────────────────────────────────────────────────
 
 @app.command("update")
-def update() -> None:
+def update(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
     """Pull latest version from git and reinstall."""
     import subprocess
     repo_root = Path(__file__).resolve().parent.parent
     console.print(build_header())
     console.print()
+
+    if not yes:
+        console.print("[bold]This will run git pull and pip install from the remote repository.[/bold]")
+        console.print(f"  Repository: [dim]{repo_root}[/dim]\n")
+        confirm = typer.confirm("Proceed with update?", default=True)
+        if not confirm:
+            console.print("[dim]Update cancelled.[/dim]")
+            raise typer.Exit()
+
     console.print("[bold]Updating Dexscreener CLI...[/bold]\n")
 
     # Git pull
