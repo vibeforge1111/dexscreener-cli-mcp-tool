@@ -627,6 +627,7 @@ def render_hot_table(
     table.add_column("Txns", justify="right")
     table.add_column("Liquidity", justify="right", min_width=9)
     table.add_column("Holders", justify="right")
+    table.add_column("Age", justify="right")
     if not compact:
         table.add_column("MCap", justify="right", min_width=9)
 
@@ -658,6 +659,7 @@ def render_hot_table(
                 str(p.txns_h1),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
+                _age_badge(p.age_hours),
             )
         else:
             table.add_row(
@@ -671,6 +673,7 @@ def render_hot_table(
                 str(p.txns_h1),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
+                _age_badge(p.age_hours),
                 fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
             )
 
@@ -1124,6 +1127,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     table.add_column("Vol 24h", justify="right")
     table.add_column("Liq", justify="right")
     table.add_column("Holders", justify="right")
+    table.add_column("Age", justify="right")
 
     for pair in pairs:
         addr_style = _addr_trust_style(pair)
@@ -1135,6 +1139,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
             fmt_usd(pair.volume_h24),
             fmt_usd(pair.liquidity_usd),
             holders_text(pair.holders_count),
+            _age_badge(pair.age_hours),
         )
     if not pairs:
         cols = len(table.columns)
