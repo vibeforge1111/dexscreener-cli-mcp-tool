@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import string
 from datetime import UTC, datetime
 from typing import Any
-from collections import UserDict
 from urllib.parse import urlparse
 
 import httpx
@@ -83,9 +83,9 @@ def _candidate_line(candidate: HotTokenCandidate) -> str:
     )
 
 
-class _SafeFormatDict(UserDict[str, str]):
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
+class _SafeTemplate(string.Template):
+    """Template that leaves unrecognized placeholders intact instead of raising."""
+    pass
 
 
 def _as_list(value: Any) -> list[str]:
@@ -139,13 +139,18 @@ def _render_message(task: ScanTask, alerts: dict[str, Any], candidates: list[Hot
     top_n = int(alerts.get("top_n", 3))
     context = _alert_context(task, candidates, now, top_n)
     default_template = (
-        "[{task_name}] Hot token alert\n"
-        "Top: {top_chain}:{top_token} score={top_score} 1h={top_h1} vol24={top_vol} liq={top_liq}\n"
-        "{top_url}\n"
-        "{top_lines}"
+        "[$task_name] Hot token alert\n"
+        "Top: $top_chain:$top_token score=$top_score 1h=$top_h1 vol24=$top_vol liq=$top_liq\n"
+        "$top_url\n"
+        "$top_lines"
     )
-    template = str(alerts.get("template", default_template))
-    return template.format_map(_SafeFormatDict(context))
+    raw = str(alerts.get("template", ""))
+    # Migrate legacy {var} templates to $var syntax for backwards compatibility.
+    if "{" in raw:
+        for key in context:
+            raw = raw.replace("{" + key + "}", "$" + key)
+    template = raw if raw.strip() else default_template
+    return _SafeTemplate(template).safe_substitute(context)
 
 
 def _risk_gate(alerts: dict[str, Any], candidates: list[HotTokenCandidate]) -> tuple[bool, str]:
