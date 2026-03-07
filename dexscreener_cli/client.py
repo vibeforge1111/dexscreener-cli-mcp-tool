@@ -7,6 +7,7 @@ from collections import deque
 from itertools import islice
 from time import monotonic
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -202,7 +203,7 @@ class DexScreenerClient:
         return await self._get_json(f"/orders/v1/{chain_id}/{token_address}", bucket="slow")
 
     async def search_pairs(self, query: str) -> list[dict[str, Any]]:
-        data = await self._get_json(f"/latest/dex/search?q={query}", bucket="fast")
+        data = await self._get_json(f"/latest/dex/search?q={quote(query, safe='')}", bucket="fast")
         return list(data.get("pairs", []))
 
     async def get_pair(self, chain_id: str, pair_address: str) -> dict[str, Any]:
