@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from dexscreener_cli.alerts import _SafeTemplate, validate_webhook_url
+from dexscreener_cli.alerts import _build_delivery_target, _SafeTemplate, _sanitize_channel_error, validate_webhook_url
 from dexscreener_cli.client import _validate_path_segment
 from dexscreener_cli.task_runner import _sanitize_error
 from dexscreener_cli.watch_controls import _sanitize_clipboard
@@ -42,6 +42,10 @@ class TestWebhookValidation:
     def test_blocks_empty_hostname(self) -> None:
         with pytest.raises(ValueError, match="hostname"):
             validate_webhook_url("https:///path")
+
+    def test_blocks_userinfo(self) -> None:
+        with pytest.raises(ValueError, match="userinfo"):
+            validate_webhook_url("https://user:pass@example.com/hook")
 
 
 class TestPathSegmentValidation:
@@ -112,6 +116,24 @@ class TestSanitizeError:
     def test_preserves_normal_message(self) -> None:
         msg = "Connection timeout after 10 seconds"
         assert _sanitize_error(msg) == msg
+
+
+class TestChannelErrorSanitization:
+    def test_strips_urls_and_tokens(self) -> None:
+        exc = RuntimeError("Post failed for https://api.telegram.org/bot123:ABC/sendMessage?chat_id=99")
+        cleaned = _sanitize_channel_error(exc)
+        assert "123:ABC" not in cleaned
+        assert "https://api.telegram.org" not in cleaned
+        assert "<url>" in cleaned
+
+
+class TestPinnedWebhookTargets:
+    def test_build_delivery_target_pins_ip_and_host_header(self) -> None:
+        target = _build_delivery_target("https://api.telegram.org/bot123:ABC/sendMessage")
+        assert target.connect_url.startswith("https://")
+        assert "api.telegram.org" not in target.connect_url
+        assert target.host_header == "api.telegram.org"
+        assert target.sni_hostname == "api.telegram.org"
 
 
 class TestSanitizeClipboard:

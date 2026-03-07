@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import string
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 
 import httpx
 
@@ -20,6 +22,105 @@ _ALLOWED_WEBHOOK_HOSTS: frozenset[str] = frozenset(
         "api.telegram.org",
     }
 )
+
+_MAX_CHANNEL_ERROR_LEN = 240
+_URL_ERROR_RE = re.compile(r"https?://\S+")
+_TG_TOKEN_RE = re.compile(r"bot[0-9A-Za-z:_-]+")
+
+
+@dataclass(slots=True)
+class _ResolvedWebhookTarget:
+    connect_url: str
+    host_header: str
+    sni_hostname: str | None
+
+
+def _is_public_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not any(
+        [
+            addr.is_private,
+            addr.is_reserved,
+            addr.is_loopback,
+            addr.is_link_local,
+            addr.is_multicast,
+            addr.is_unspecified,
+        ]
+    )
+
+
+def _resolve_public_addresses(hostname: str, *, allow_unresolved: bool) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        if allow_unresolved:
+            return []
+        raise ValueError("Webhook hostname did not resolve") from exc
+
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for _family, _type, _proto, _canonname, sockaddr in infos:
+        addr = ipaddress.ip_address(sockaddr[0])
+        if not _is_public_ip(addr):
+            raise ValueError(f"Webhook URL resolves to private/reserved address: {addr}")
+        addresses.append(addr)
+    return addresses
+
+
+def _build_delivery_target(url: str) -> _ResolvedWebhookTarget:
+    validate_webhook_url(url)
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    addresses = _resolve_public_addresses(hostname, allow_unresolved=False)
+    if not addresses:
+        raise ValueError("Webhook hostname did not resolve")
+
+    connect_host = addresses[0].compressed
+    if ":" in connect_host:
+        connect_host = f"[{connect_host}]"
+
+    netloc = connect_host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+
+    host_header = hostname
+    if parsed.port is not None:
+        default_port = 443 if parsed.scheme == "https" else 80
+        if parsed.port != default_port:
+            host_header = f"{host_header}:{parsed.port}"
+
+    connect_url = urlunsplit(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path or "/",
+            parsed.query,
+            "",
+        )
+    )
+    return _ResolvedWebhookTarget(
+        connect_url=connect_url,
+        host_header=host_header,
+        sni_hostname=hostname if parsed.scheme == "https" else None,
+    )
+
+
+def _sanitize_channel_error(exc: Exception) -> str:
+    cleaned = _URL_ERROR_RE.sub("<url>", str(exc))
+    cleaned = _TG_TOKEN_RE.sub("bot<redacted>", cleaned)
+    cleaned = cleaned[:_MAX_CHANNEL_ERROR_LEN]
+    return f"{exc.__class__.__name__}: {cleaned}"
+
+
+async def _post_json(url: str, payload: dict[str, Any], *, timeout: httpx.Timeout) -> httpx.Response:
+    target = _build_delivery_target(url)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        request = client.build_request(
+            "POST",
+            target.connect_url,
+            json=payload,
+            headers={"Host": target.host_header},
+            extensions={"sni_hostname": target.sni_hostname} if target.sni_hostname else None,
+        )
+        return await client.send(request, follow_redirects=False)
 
 
 def validate_webhook_url(url: str) -> str:
@@ -38,6 +139,10 @@ def validate_webhook_url(url: str) -> str:
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("Webhook URL has no hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("Webhook URL must not include userinfo")
+    if parsed.fragment:
+        raise ValueError("Webhook URL must not include fragments")
 
     if parsed.scheme == "http" and hostname not in _ALLOWED_WEBHOOK_HOSTS:
         raise ValueError("Webhook URL must use https:// (http only allowed for discord.com, api.telegram.org)")
@@ -53,14 +158,7 @@ def validate_webhook_url(url: str) -> str:
         raise ValueError("Webhook URL must not point to cloud metadata endpoints")
 
     # Resolve hostname and check if it maps to a private/reserved IP.
-    try:
-        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for _family, _type, _proto, _canonname, sockaddr in infos:
-            addr = ipaddress.ip_address(sockaddr[0])
-            if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
-                raise ValueError(f"Webhook URL resolves to private/reserved address: {addr}")
-    except socket.gaierror:
-        pass  # Let httpx handle DNS failures at request time.
+    _resolve_public_addresses(hostname, allow_unresolved=True)
 
     return url
 
@@ -227,104 +325,104 @@ async def _dispatch_channels(
         webhook_extra = {}
 
     timeout = httpx.Timeout(10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        webhook = alerts.get("webhook_url")
-        if webhook:
-            try:
-                validate_webhook_url(webhook)
-                resp = await client.post(
-                    webhook,
-                    json={
-                        "event": "dexscreener.task.alert",
-                        "test": is_test,
-                        "task": {"id": task.id, "name": task.name},
-                        "timestamp": now.isoformat(),
-                        "message": message,
-                        "top": {
-                            "chainId": top.pair.chain_id if top else None,
-                            "token": top.pair.base_symbol if top else None,
-                            "score": top.score if top else None,
-                            "priceChangeH1": top.pair.price_change_h1 if top else None,
-                            "volumeH24": top.pair.volume_h24 if top else None,
-                            "liquidityUsd": top.pair.liquidity_usd if top else None,
-                            "pairUrl": top.pair.pair_url if top else None,
-                        },
-                        "results": [
-                            {
-                                "chainId": c.pair.chain_id,
-                                "token": c.pair.base_symbol,
-                                "tokenName": c.pair.base_name,
-                                "score": c.score,
-                                "priceChangeH1": c.pair.price_change_h1,
-                                "volumeH24": c.pair.volume_h24,
-                                "liquidityUsd": c.pair.liquidity_usd,
-                                "pairUrl": c.pair.pair_url,
-                            }
-                            for c in candidates[:5]
-                        ],
-                        "extra": webhook_extra,
+    webhook = alerts.get("webhook_url")
+    if webhook:
+        try:
+            resp = await _post_json(
+                webhook,
+                {
+                    "event": "dexscreener.task.alert",
+                    "test": is_test,
+                    "task": {"id": task.id, "name": task.name},
+                    "timestamp": now.isoformat(),
+                    "message": message,
+                    "top": {
+                        "chainId": top.pair.chain_id if top else None,
+                        "token": top.pair.base_symbol if top else None,
+                        "score": top.score if top else None,
+                        "priceChangeH1": top.pair.price_change_h1 if top else None,
+                        "volumeH24": top.pair.volume_h24 if top else None,
+                        "liquidityUsd": top.pair.liquidity_usd if top else None,
+                        "pairUrl": top.pair.pair_url if top else None,
                     },
-                )
-                channels["webhook"] = {"ok": resp.is_success, "status": resp.status_code}
-            except Exception as exc:
-                channels["webhook"] = {"ok": False, "error": str(exc)}
-
-        discord = alerts.get("discord_webhook_url")
-        if discord:
-            try:
-                validate_webhook_url(discord)
-                fields = []
-                for c in candidates[:3]:
-                    fields.append(
+                    "results": [
                         {
-                            "name": f"{c.pair.chain_id}:{c.pair.base_symbol} ({c.score:.1f})",
-                            "value": (
-                                f"1h {c.pair.price_change_h1:+.2f}% | "
-                                f"Vol24 ${c.pair.volume_h24:,.0f} | "
-                                f"Liq ${c.pair.liquidity_usd:,.0f}\n{c.pair.pair_url}"
-                            ),
-                            "inline": False,
+                            "chainId": c.pair.chain_id,
+                            "token": c.pair.base_symbol,
+                            "tokenName": c.pair.base_name,
+                            "score": c.score,
+                            "priceChangeH1": c.pair.price_change_h1,
+                            "volumeH24": c.pair.volume_h24,
+                            "liquidityUsd": c.pair.liquidity_usd,
+                            "pairUrl": c.pair.pair_url,
                         }
-                    )
-                resp = await client.post(
-                    discord,
-                    json={
-                        "content": f"[{'TEST' if is_test else 'ALERT'}] {task.name}",
-                        "embeds": [
-                            {
-                                "title": "Dexscreener Signal",
-                                "description": message[:3000],
-                                "color": 3066993 if not is_test else 3447003,
-                                "fields": fields,
-                                "timestamp": now.isoformat(),
-                            }
-                        ],
-                    },
-                )
-                channels["discord"] = {"ok": resp.is_success, "status": resp.status_code}
-            except Exception as exc:
-                channels["discord"] = {"ok": False, "error": str(exc)}
+                        for c in candidates[:5]
+                    ],
+                    "extra": webhook_extra,
+                },
+                timeout=timeout,
+            )
+            channels["webhook"] = {"ok": resp.is_success, "status": resp.status_code}
+        except Exception as exc:
+            channels["webhook"] = {"ok": False, "error": _sanitize_channel_error(exc)}
 
-        tg_token = alerts.get("telegram_bot_token")
-        tg_chat = alerts.get("telegram_chat_id")
-        if tg_token and tg_chat:
-            try:
-                # Validate token contains only safe characters (digits, colon, alphanumeric, dash, underscore).
-                if not all(c.isalnum() or c in ":-_" for c in str(tg_token)):
-                    raise ValueError("Telegram bot token contains invalid characters")
-                url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                resp = await client.post(
-                    url,
-                    json={
-                        "chat_id": str(tg_chat),
-                        "text": message,
-                        "parse_mode": "Markdown",
-                        "disable_web_page_preview": True,
-                    },
+    discord = alerts.get("discord_webhook_url")
+    if discord:
+        try:
+            fields = []
+            for c in candidates[:3]:
+                fields.append(
+                    {
+                        "name": f"{c.pair.chain_id}:{c.pair.base_symbol} ({c.score:.1f})",
+                        "value": (
+                            f"1h {c.pair.price_change_h1:+.2f}% | "
+                            f"Vol24 ${c.pair.volume_h24:,.0f} | "
+                            f"Liq ${c.pair.liquidity_usd:,.0f}\n{c.pair.pair_url}"
+                        ),
+                        "inline": False,
+                    }
                 )
-                channels["telegram"] = {"ok": resp.is_success, "status": resp.status_code}
-            except Exception as exc:
-                channels["telegram"] = {"ok": False, "error": str(exc)}
+            resp = await _post_json(
+                discord,
+                {
+                    "content": f"[{'TEST' if is_test else 'ALERT'}] {task.name}",
+                    "embeds": [
+                        {
+                            "title": "Dexscreener Signal",
+                            "description": message[:3000],
+                            "color": 3066993 if not is_test else 3447003,
+                            "fields": fields,
+                            "timestamp": now.isoformat(),
+                        }
+                    ],
+                },
+                timeout=timeout,
+            )
+            channels["discord"] = {"ok": resp.is_success, "status": resp.status_code}
+        except Exception as exc:
+            channels["discord"] = {"ok": False, "error": _sanitize_channel_error(exc)}
+
+    tg_token = alerts.get("telegram_bot_token")
+    tg_chat = alerts.get("telegram_chat_id")
+    if tg_token and tg_chat:
+        try:
+            # Validate token contains only safe characters (digits, colon, alphanumeric, dash, underscore).
+            if not all(c.isalnum() or c in ":-_" for c in str(tg_token)):
+                raise ValueError("Telegram bot token contains invalid characters")
+            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+            resp = await _post_json(
+                url,
+                {
+                    "chat_id": str(tg_chat),
+                    "text": message,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True,
+                },
+                timeout=timeout,
+            )
+            channels["telegram"] = {"ok": resp.is_success, "status": resp.status_code}
+        except Exception as exc:
+            channels["telegram"] = {"ok": False, "error": _sanitize_channel_error(exc)}
 
     sent = any(v.get("ok") for v in channels.values()) if channels else False
     return {"sent": sent, "reason": "ok" if sent else "all-channels-failed", "channels": channels}
