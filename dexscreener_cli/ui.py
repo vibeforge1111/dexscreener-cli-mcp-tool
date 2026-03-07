@@ -419,23 +419,7 @@ def build_header() -> Panel:
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     content = Text()
-    # Gradient-styled logo - dark theme: white to green
-    logo_chars = "DEX SCANNER"
-    gradient = [
-        f"bold {C_WHITE}",
-        f"bold {C_WHITE}",
-        f"bold {C_WHITE}",
-        f"bold {C_TEXT}",
-        f"bold {C_TEXT}",
-        f"bold {C_TEXT}",
-        f"bold {C_GREEN}",
-        f"bold {C_GREEN}",
-        f"bold {C_GREEN}",
-        f"bold {C_GREEN}",
-        f"bold {C_GREEN}",
-    ]
-    for ch, sty in zip(logo_chars, gradient):
-        content.append(ch, style=sty)
+    content.append("DEX SCANNER", style=f"bold {C_WHITE}")
     content.append("\n")
 
     content.append(_safe_text(SEPARATOR * 30) + "\n", style=C_BORDER)
@@ -643,6 +627,7 @@ def render_hot_table(
     if not compact:
         table.add_column("Score", justify="center", min_width=12)
     table.add_column("1h", justify="right", min_width=10)
+    table.add_column("24h", justify="right", min_width=10)
     table.add_column("24h Vol", justify="right")
     table.add_column("1h Txns", justify="right")
     table.add_column("Liq", justify="right")
@@ -658,6 +643,7 @@ def render_hot_table(
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
         h1 = _momentum_text(p.price_change_h1)
+        h24 = _momentum_text(p.price_change_h24)
         signal_text = _signal_badge(candidate.tags, candidate.discovery)
         boost = f"{candidate.boost_total:.0f}/{candidate.boost_count}"
 
@@ -668,6 +654,7 @@ def render_hot_table(
                 _chain_text(p.chain_id),
                 token_text,
                 h1,
+                h24,
                 _vol_heat(p.volume_h24),
                 str(p.txns_h1),
                 _liq_bar(p.liquidity_usd),
@@ -681,6 +668,7 @@ def render_hot_table(
                 token_text,
                 _score_gauge(candidate.score),
                 h1,
+                h24,
                 _vol_heat(p.volume_h24, mini_bar=True),
                 str(p.txns_h1),
                 _liq_bar(p.liquidity_usd),
@@ -1091,6 +1079,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     table.add_column("Liq", justify="right")
     table.add_column("Holders", justify="right")
     table.add_column("1h", justify="right", min_width=10)
+    table.add_column("24h", justify="right", min_width=10)
     if not compact:
         table.add_column("Pair", style=C_DIM)
 
@@ -1108,6 +1097,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
             fmt_usd(pair.liquidity_usd),
             holders_text(pair.holders_count),
             _momentum_text(pair.price_change_h1),
+            _momentum_text(pair.price_change_h24),
             *((_safe_text(pair.pair_address),) if not compact else ()),
         )
     if not pairs:
