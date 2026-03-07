@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from time import monotonic
 from typing import Any
 
@@ -9,7 +10,12 @@ import httpx
 from .client import SlidingWindowLimiter
 from .models import PairSnapshot
 
-HOLDER_CHAIN_IDS: dict[str, int] = {
+# ---------------------------------------------------------------------------
+# Provider config
+# ---------------------------------------------------------------------------
+
+# Honeypot.is (EVM only, no key needed)
+HONEYPOT_CHAIN_IDS: dict[str, int] = {
     "ethereum": 1,
     "bsc": 56,
     "polygon": 137,
@@ -23,10 +29,31 @@ HOLDER_CHAIN_IDS: dict[str, int] = {
     "mantle": 5000,
 }
 
+# Blockscout (ETH + Base, completely free, no key)
+BLOCKSCOUT_URLS: dict[str, str] = {
+    "ethereum": "https://eth.blockscout.com",
+    "base": "https://base.blockscout.com",
+}
+
+# Moralis (all chains, free key from moralis.com)
+MORALIS_EVM_CHAINS: dict[str, str] = {
+    "ethereum": "0x1",
+    "bsc": "0x38",
+    "base": "0x2105",
+    "polygon": "0x89",
+    "arbitrum": "0xa4b1",
+    "optimism": "0xa",
+    "avalanche": "0xa86a",
+}
+MORALIS_SOLANA_NETWORKS = {"solana": "mainnet"}
+
+# ---------------------------------------------------------------------------
+# Shared config
+# ---------------------------------------------------------------------------
+
 HOLDER_CACHE_TTL_SECONDS = 15 * 60
-HOLDER_REQUEST_TIMEOUT_SECONDS = 6.0
+HOLDER_REQUEST_TIMEOUT_SECONDS = 8.0
 HOLDER_REQUESTS_PER_MINUTE = 45
-HOLDER_SOURCE = "honeypot.is"
 
 _holder_limiter = SlidingWindowLimiter(HOLDER_REQUESTS_PER_MINUTE)
 _holder_cache_lock = asyncio.Lock()
@@ -60,7 +87,94 @@ async def _cache_set(chain_id: str, token_address: str, holders_count: int | Non
         )
 
 
-def _parse_holders_count(payload: dict[str, Any]) -> int | None:
+def _get_moralis_key() -> str | None:
+    return os.environ.get("MORALIS_API_KEY", "").strip() or None
+
+
+# ---------------------------------------------------------------------------
+# Provider: Blockscout (ETH + Base, free, no key)
+# ---------------------------------------------------------------------------
+
+async def _fetch_blockscout(
+    chain_id: str,
+    token_address: str,
+    client: httpx.AsyncClient,
+) -> int | None:
+    base_url = BLOCKSCOUT_URLS.get(chain_id)
+    if not base_url:
+        return None
+    try:
+        resp = await client.get(
+            f"{base_url}/api/v2/tokens/{token_address}",
+            headers={"Accept": "application/json"},
+        )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        raw = data.get("holders_count") or data.get("holders")
+        if raw is not None:
+            return int(raw)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Provider: Moralis (all chains, free API key)
+# ---------------------------------------------------------------------------
+
+async def _fetch_moralis(
+    chain_id: str,
+    token_address: str,
+    api_key: str,
+    client: httpx.AsyncClient,
+) -> int | None:
+    headers = {"Accept": "application/json", "X-API-Key": api_key}
+
+    # Solana
+    network = MORALIS_SOLANA_NETWORKS.get(chain_id)
+    if network:
+        try:
+            resp = await client.get(
+                f"https://solana-gateway.moralis.io/token/{network}/{token_address}/holders",
+                headers=headers,
+            )
+            if resp.status_code >= 400:
+                return None
+            data = resp.json()
+            raw = data.get("totalHolders") or data.get("total_holders") or data.get("total")
+            if raw is not None:
+                return int(raw)
+        except Exception:
+            pass
+        return None
+
+    # EVM
+    chain_hex = MORALIS_EVM_CHAINS.get(chain_id)
+    if not chain_hex:
+        return None
+    try:
+        resp = await client.get(
+            f"https://deep-index.moralis.io/api/v2.2/erc20/{token_address}/owners",
+            params={"chain": chain_hex, "limit": "1"},
+            headers=headers,
+        )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        raw = data.get("total")
+        if raw is not None:
+            return int(raw)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Provider: Honeypot.is (EVM only, no key)
+# ---------------------------------------------------------------------------
+
+def _parse_honeypot_holders(payload: dict[str, Any]) -> int | None:
     token = payload.get("token")
     if isinstance(token, dict):
         raw = token.get("totalHolders")
@@ -73,6 +187,33 @@ def _parse_holders_count(payload: dict[str, Any]) -> int | None:
     return None
 
 
+async def _fetch_honeypot(
+    chain_id: str,
+    token_address: str,
+    client: httpx.AsyncClient,
+) -> int | None:
+    chain_numeric = HONEYPOT_CHAIN_IDS.get(chain_id)
+    if chain_numeric is None:
+        return None
+    try:
+        resp = await client.get(
+            "https://api.honeypot.is/v2/IsHoneypot",
+            params={"address": token_address, "chainID": str(chain_numeric)},
+            headers={"Accept": "application/json"},
+        )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+        return _parse_honeypot_holders(payload if isinstance(payload, dict) else {})
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main fetch: tries providers in order
+# ---------------------------------------------------------------------------
+
 async def fetch_holder_count(
     chain_id: str,
     token_address: str,
@@ -84,43 +225,56 @@ async def fetch_holder_count(
     if not normalized_token:
         return None, None
 
-    chain_numeric = HOLDER_CHAIN_IDS.get(normalized_chain)
-    if chain_numeric is None:
-        return None, "unsupported-chain"
-
     cached = await _cache_get(normalized_chain, normalized_token)
     if cached is not None:
         return cached
 
     own_client = client is None
-    http_client = client
-    if http_client is None:
-        http_client = httpx.AsyncClient(
-            base_url="https://api.honeypot.is",
-            timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
-            headers={"Accept": "application/json"},
-        )
+    http_client = client or httpx.AsyncClient(
+        timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
+    )
 
     try:
         await _holder_limiter.acquire()
-        response = await http_client.get(
-            "/v2/IsHoneypot",
-            params={"address": normalized_token, "chainID": str(chain_numeric)},
-        )
-        if response.status_code >= 400:
-            await _cache_set(normalized_chain, normalized_token, None, "unavailable")
-            return None, "unavailable"
-        payload = response.json()
-        holders_count = _parse_holders_count(payload if isinstance(payload, dict) else {})
-        await _cache_set(normalized_chain, normalized_token, holders_count, HOLDER_SOURCE)
-        return holders_count, HOLDER_SOURCE
+
+        moralis_key = _get_moralis_key()
+
+        # 1. Moralis (if key set) — covers all chains including Solana
+        if moralis_key:
+            count = await _fetch_moralis(normalized_chain, normalized_token, moralis_key, http_client)
+            if count is not None and count > 0:
+                await _cache_set(normalized_chain, normalized_token, count, "moralis")
+                return count, "moralis"
+
+        # 2. Blockscout (ETH + Base, free, no key)
+        if normalized_chain in BLOCKSCOUT_URLS:
+            count = await _fetch_blockscout(normalized_chain, normalized_token, http_client)
+            if count is not None and count > 0:
+                await _cache_set(normalized_chain, normalized_token, count, "blockscout")
+                return count, "blockscout"
+
+        # 3. Honeypot.is (EVM only, no key)
+        if normalized_chain in HONEYPOT_CHAIN_IDS:
+            count = await _fetch_honeypot(normalized_chain, normalized_token, http_client)
+            if count is not None and count > 0:
+                await _cache_set(normalized_chain, normalized_token, count, "honeypot.is")
+                return count, "honeypot.is"
+
+        # No provider returned data
+        await _cache_set(normalized_chain, normalized_token, None, None)
+        return None, None
+
     except Exception:
-        await _cache_set(normalized_chain, normalized_token, None, "unavailable")
-        return None, "unavailable"
+        await _cache_set(normalized_chain, normalized_token, None, "error")
+        return None, "error"
     finally:
-        if own_client and http_client is not None:
+        if own_client:
             await http_client.aclose()
 
+
+# ---------------------------------------------------------------------------
+# Hydrate helpers (unchanged interface)
+# ---------------------------------------------------------------------------
 
 async def hydrate_pair_holders(pairs: list[PairSnapshot], *, max_pairs: int | None = None) -> None:
     if not pairs:
@@ -139,7 +293,6 @@ async def hydrate_pair_holders(pairs: list[PairSnapshot], *, max_pairs: int | No
     if not grouped:
         return
 
-    # Prioritize rows with the strongest current flow first.
     ordered = sorted(
         grouped.items(),
         key=lambda item: max(
@@ -153,9 +306,7 @@ async def hydrate_pair_holders(pairs: list[PairSnapshot], *, max_pairs: int | No
 
     semaphore = asyncio.Semaphore(8)
     async with httpx.AsyncClient(
-        base_url="https://api.honeypot.is",
         timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
-        headers={"Accept": "application/json"},
     ) as client:
         async def worker(chain: str, token: str, bucket: list[PairSnapshot]) -> None:
             async with semaphore:
@@ -193,9 +344,7 @@ async def hydrate_token_rows_with_holders(
 
     semaphore = asyncio.Semaphore(8)
     async with httpx.AsyncClient(
-        base_url="https://api.honeypot.is",
         timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
-        headers={"Accept": "application/json"},
     ) as client:
         async def worker(chain: str, token: str, bucket: list[dict[str, object]]) -> None:
             async with semaphore:

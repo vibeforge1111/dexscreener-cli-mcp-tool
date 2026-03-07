@@ -573,6 +573,12 @@ def render_status_footer(
     else:
         txt.append("one-shot scan", style=C_DIM)
 
+    # Holder API hint
+    moralis_key = os.environ.get("MORALIS_API_KEY", "").strip()
+    if not moralis_key:
+        txt.append(_safe_text(f"  {VLINE}  "), style=C_BORDER)
+        txt.append("holders: set MORALIS_API_KEY for SOL/BSC", style=C_DIM)
+
     return Panel(
         txt,
         border_style=C_BORDER_DIM,
@@ -621,64 +627,85 @@ def render_hot_table(
         border_style=C_BORDER,
         title_style="",
     )
-    table.add_column(_safe_text(f" {DIAMOND}"), justify="right", style=f"bold {C_TEXT}", width=4)
-    table.add_column("Chain", min_width=6)
+    table.add_column("#", justify="right", style=f"bold {C_TEXT}", width=3)
+    table.add_column("Chain", min_width=5)
     table.add_column("Token", style=f"bold {C_GOLD}", min_width=8)
-    if not compact:
-        table.add_column("Score", justify="center", min_width=12)
+    table.add_column("Score", justify="right", width=5)
     table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h", justify="right", min_width=10)
-    table.add_column("24h Vol", justify="right")
-    table.add_column("1h Txns", justify="right")
-    table.add_column("Liq", justify="right")
+    table.add_column("24h Vol", justify="right", min_width=9)
+    table.add_column("Txns", justify="right")
+    table.add_column("Liquidity", justify="right", min_width=9)
     table.add_column("Holders", justify="right")
     if not compact:
-        table.add_column("Price", justify="right")
-        table.add_column("MCap", justify="right")
-        table.add_column("Boost", justify="right")
-        table.add_column("Flow", no_wrap=True, min_width=18)
+        table.add_column("MCap", justify="right", min_width=9)
+        table.add_column("Buy%", justify="right", width=5)
         table.add_column("Age", justify="right")
-        table.add_column("Signal")
 
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
         h1 = _momentum_text(p.price_change_h1)
         h24 = _momentum_text(p.price_change_h24)
-        signal_text = _signal_badge(candidate.tags, candidate.discovery)
-        boost = f"{candidate.boost_total:.0f}/{candidate.boost_count}"
+
+        # Buy percentage as simple number
+        total_txns = p.buys_h1 + p.sells_h1
+        if total_txns > 0:
+            buy_pct = p.buys_h1 / total_txns * 100
+            buy_color = C_GREEN if buy_pct >= 55 else C_RED if buy_pct < 45 else C_TEXT
+            buy_text = Text(f"{buy_pct:.0f}%", style=buy_color)
+        else:
+            buy_text = Text("-", style=C_DIM)
+
+        # Score as plain colored number
+        sc = candidate.score
+        if sc >= 80:
+            score_text = Text(f"{sc:.0f}", style=f"bold {C_GREEN_BRIGHT}")
+        elif sc >= 65:
+            score_text = Text(f"{sc:.0f}", style=f"bold {C_GOLD}")
+        elif sc >= 50:
+            score_text = Text(f"{sc:.0f}", style=C_TEXT)
+        else:
+            score_text = Text(f"{sc:.0f}", style=C_DIM)
+
+        # Age as simple text
+        age_h = p.age_hours
+        if age_h is None:
+            age_text = Text("-", style=C_DIM)
+        elif age_h < 1:
+            age_text = Text(f"{age_h * 60:.0f}m", style=f"bold {C_CYAN}")
+        elif age_h < 24:
+            age_text = Text(f"{age_h:.1f}h", style=C_TEXT)
+        else:
+            age_text = Text(f"{age_h / 24:.1f}d", style=C_DIM)
 
         if compact:
-            token_text = Text(_safe_text(p.base_symbol), style=f"bold {C_GOLD}")
             table.add_row(
-                _rank_badge(i),
+                str(i),
                 _chain_text(p.chain_id),
-                token_text,
+                Text(_safe_text(p.base_symbol), style=f"bold {C_GOLD}"),
+                score_text,
                 h1,
                 h24,
-                _vol_heat(p.volume_h24),
+                fmt_usd(p.volume_h24),
                 str(p.txns_h1),
-                _liq_bar(p.liquidity_usd),
+                fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
             )
         else:
-            token_text = Text(_safe_text(p.base_symbol), style=f"bold {C_GOLD}")
             table.add_row(
-                _rank_badge(i),
+                str(i),
                 _chain_text(p.chain_id),
-                token_text,
-                _score_gauge(candidate.score),
+                Text(_safe_text(p.base_symbol), style=f"bold {C_GOLD}"),
+                score_text,
                 h1,
                 h24,
-                _vol_heat(p.volume_h24, mini_bar=True),
+                fmt_usd(p.volume_h24),
                 str(p.txns_h1),
-                _liq_bar(p.liquidity_usd),
-                _holders_gauge(p.holders_count),
-                fmt_price(p.price_usd),
+                fmt_usd(p.liquidity_usd),
+                holders_text(p.holders_count),
                 fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
-                boost,
-                _flow_meter(p.buys_h1, p.sells_h1),
-                _age_badge(p.age_hours),
-                signal_text,
+                buy_text,
+                age_text,
             )
 
     if not candidates:
