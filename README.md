@@ -1,5 +1,7 @@
 # Dexscreener Unofficial CLI + MCP + Skills
 
+![Dexscreener CLI Screenshot](assets/screenshot.png)
+
 **100% free to use.** All APIs included are public and free - no API keys required to get started. Optional Moralis key unlocks holder data.
 
 A visual terminal scanner, MCP server, and AI skill for Dexscreener token signals. **Unofficial** - not affiliated with or endorsed by Dexscreener.
