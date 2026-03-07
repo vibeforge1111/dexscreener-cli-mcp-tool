@@ -2,7 +2,7 @@
 chcp 65001 >nul
 echo.
 echo  ====================================
-echo   Dex Scanner - Quick Install
+echo   Dexscreener CLI - Quick Install
 echo  ====================================
 echo.
 

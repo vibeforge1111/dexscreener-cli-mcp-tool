@@ -1,7 +1,7 @@
 [project]
 name = "dexscreener-cli-mcp-tool"
 version = "0.1.0"
-description = "Unofficial visual terminal CLI + MCP server for Dexscreener signal scanning"
+description = "Dexscreener Unofficial CLI + MCP + Skills - free token scanner with AI agent support"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "vibeforge1111" }]

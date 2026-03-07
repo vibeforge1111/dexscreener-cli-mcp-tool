@@ -1,8 +1,17 @@
-# Dex Scanner
+# Dexscreener Unofficial CLI + MCP + Skills
 
-**Unofficial** visual terminal scanner + MCP server for Dexscreener token signals. Not affiliated with or endorsed by Dexscreener.
+**100% free to use.** All APIs included are public and free - no API keys required to get started. Optional Moralis key unlocks holder data.
 
-Scans hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Scores them by volume, liquidity, momentum, and flow pressure. Shows results in a styled terminal dashboard or exposes them via MCP for AI agents.
+A visual terminal scanner, MCP server, and AI skill for Dexscreener token signals. **Unofficial** - not affiliated with or endorsed by Dexscreener.
+
+Scans hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Scores them by volume, liquidity, momentum, and flow pressure. Use it from the terminal, connect it to AI agents via MCP, or load it as a skill in Claude/Codex/OpenClaw.
+
+**Free APIs used:**
+- [Dexscreener API](https://docs.dexscreener.com/) - token data, pairs, profiles, boosts
+- [GeckoTerminal API](https://www.geckoterminal.com/) - trending pools, new tokens
+- [Blockscout API](https://docs.blockscout.com/) - holder counts (Base chain)
+- [Honeypot.is API](https://honeypot.is/) - holder counts (Solana, ETH, BSC)
+- [Moralis API](https://moralis.io/) - holder counts (optional, requires free key)
 
 ---
 

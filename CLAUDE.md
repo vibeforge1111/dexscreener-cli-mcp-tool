@@ -1,8 +1,8 @@
-# CLAUDE.md - Dex Scanner
+# CLAUDE.md - Dexscreener Unofficial CLI + MCP + Skills
 
 ## What This Is
 
-An **unofficial** CLI scanner + MCP server that uses Dexscreener's public API to discover hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Not affiliated with or endorsed by Dexscreener. Scores tokens 0-100 based on volume, liquidity, momentum, and flow pressure.
+An **unofficial** CLI scanner, MCP server, and AI skill for Dexscreener token signals. Not affiliated with or endorsed by Dexscreener. All APIs used are free and public - no keys required to get started. Scores tokens 0-100 based on volume, liquidity, momentum, and flow pressure across Solana, Base, Ethereum, BSC, and Arbitrum.
 
 ## Quick Commands
 

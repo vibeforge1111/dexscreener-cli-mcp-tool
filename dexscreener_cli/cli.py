@@ -949,7 +949,7 @@ def setup() -> None:
     console.print()
     console.print(
         Panel(
-            "[bold]Welcome to the Dex Scanner setup wizard.[/bold]\n"
+            "[bold]Welcome to the Dexscreener CLI setup wizard.[/bold]\n"
             "Answer 5 quick questions to calibrate your scanner.\n"
             "Your settings are saved and auto-loaded on every scan.",
             border_style="#3a3d4a",
@@ -1083,7 +1083,7 @@ def update() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     console.print(build_header())
     console.print()
-    console.print("[bold]Updating Dex Scanner...[/bold]\n")
+    console.print("[bold]Updating Dexscreener CLI...[/bold]\n")
 
     # Git pull
     try:

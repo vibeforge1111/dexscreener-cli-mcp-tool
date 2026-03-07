@@ -417,7 +417,7 @@ def build_header() -> Panel:
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     content = Text()
-    content.append("DEX SCANNER", style=f"bold {C_WHITE}")
+    content.append("DEXSCREENER CLI", style=f"bold {C_WHITE}")
     content.append("\n")
     content.append("Live Signal Terminal", style=C_LABEL)
     content.append(_safe_text(f"  {DOT}  "), style=C_BORDER)
