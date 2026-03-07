@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from time import monotonic
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
 
 from .client import SlidingWindowLimiter
 from .models import PairSnapshot
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Provider config
@@ -45,6 +49,20 @@ HONEYPOT_CHAIN_IDS: dict[str, int] = {
     "zksync": 324,
     "mantle": 5000,
 }
+
+# Moralis (EVM + Solana, requires API key)
+MORALIS_EVM_CHAINS: dict[str, str] = {
+    "ethereum": "eth",
+    "bsc": "bsc",
+    "polygon": "polygon",
+    "arbitrum": "arbitrum",
+    "base": "base",
+    "optimism": "optimism",
+    "avalanche": "avalanche",
+}
+
+_moralis_api_key: str = os.environ.get("MORALIS_API_KEY", "").strip()
+_helius_api_key: str = os.environ.get("HELIUS_API_KEY", "").strip()
 
 # ---------------------------------------------------------------------------
 # Shared config
@@ -193,6 +211,77 @@ async def _fetch_honeypot(
 
 
 # ---------------------------------------------------------------------------
+# Provider: Moralis (EVM + Solana, requires API key)
+# ---------------------------------------------------------------------------
+
+async def _fetch_moralis(
+    chain_id: str,
+    token_address: str,
+    client: httpx.AsyncClient,
+) -> int | None:
+    if not _moralis_api_key:
+        return None
+    headers = {"Accept": "application/json", "X-API-Key": _moralis_api_key}
+
+    if chain_id == "solana":
+        url = f"https://solana-gateway.moralis.io/token/mainnet/{token_address}/holders"
+    elif chain_id in MORALIS_EVM_CHAINS:
+        moralis_chain = MORALIS_EVM_CHAINS[chain_id]
+        url = f"https://deep-index.moralis.io/api/v2.2/erc20/{token_address}/holders?chain={moralis_chain}"
+    else:
+        return None
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        raw = data.get("totalHolders")
+        if raw is not None:
+            return int(raw)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Provider: Helius (Solana only, requires API key)
+# ---------------------------------------------------------------------------
+
+async def _fetch_helius(
+    token_address: str,
+    client: httpx.AsyncClient,
+) -> int | None:
+    if not _helius_api_key:
+        return None
+    url = f"https://mainnet.helius-rpc.com/?api-key={_helius_api_key}"
+    try:
+        resp = await client.post(
+            url,
+            json={
+                "jsonrpc": "2.0",
+                "id": "holder-count",
+                "method": "getTokenAccounts",
+                "params": {
+                    "mint": token_address,
+                    "limit": 1,
+                    "page": 1,
+                },
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        total = data.get("result", {}).get("total")
+        if total is not None:
+            return int(total)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main fetch: tries providers in order
 # ---------------------------------------------------------------------------
 
@@ -226,14 +315,28 @@ async def fetch_holder_count(
                 await _cache_set(normalized_chain, normalized_token, count, "geckoterminal")
                 return count, "geckoterminal"
 
-        # 2. Blockscout (ETH + Base, free, no key)
+        # 2. Moralis (EVM + Solana, requires API key)
+        if _moralis_api_key and (normalized_chain in MORALIS_EVM_CHAINS or normalized_chain == "solana"):
+            count = await _fetch_moralis(normalized_chain, normalized_token, http_client)
+            if count is not None and count > 0:
+                await _cache_set(normalized_chain, normalized_token, count, "moralis")
+                return count, "moralis"
+
+        # 3. Helius (Solana only, requires API key)
+        if _helius_api_key and normalized_chain == "solana":
+            count = await _fetch_helius(normalized_token, http_client)
+            if count is not None and count > 0:
+                await _cache_set(normalized_chain, normalized_token, count, "helius")
+                return count, "helius"
+
+        # 4. Blockscout (ETH + Base, free, no key)
         if normalized_chain in BLOCKSCOUT_URLS:
             count = await _fetch_blockscout(normalized_chain, normalized_token, http_client)
             if count is not None and count > 0:
                 await _cache_set(normalized_chain, normalized_token, count, "blockscout")
                 return count, "blockscout"
 
-        # 3. Honeypot.is (EVM only, no key)
+        # 5. Honeypot.is (EVM only, no key)
         if normalized_chain in HONEYPOT_CHAIN_IDS:
             count = await _fetch_honeypot(normalized_chain, normalized_token, http_client)
             if count is not None and count > 0:

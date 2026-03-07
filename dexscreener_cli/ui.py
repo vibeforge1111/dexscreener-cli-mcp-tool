@@ -1120,7 +1120,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
         table.add_row(
             _chain_text(pair.chain_id),
             Text(_safe_text(pair.base_symbol), style=f"bold {C_GOLD}"),
-            _safe_text(_truncate_addr(pair.base_address)),
+            Text(_safe_text(pair.base_address), style=C_DIM, no_wrap=True),
             _momentum_text(pair.price_change_h1),
             _momentum_text(pair.price_change_h24),
             fmt_usd(pair.volume_h24),
