@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -9,6 +10,16 @@ from .config import DEFAULT_CHAINS, ScanFilters
 from .models import HotTokenCandidate
 from .scanner import HotScanner
 from .state import ScanTask, StateStore, TaskRunRecord, utc_now_iso
+
+_MAX_ERROR_LEN = 500
+
+
+def _sanitize_error(msg: str) -> str:
+    """Strip file paths and truncate error messages for safe storage."""
+    # Remove Windows and Unix file paths.
+    cleaned = re.sub(r"[A-Za-z]:\\[\w\\\-. ]+", "<path>", msg)
+    cleaned = re.sub(r"/(?:home|tmp|var|usr|etc|Users)/[\w/\\\-. ]+", "<path>", cleaned)
+    return cleaned[:_MAX_ERROR_LEN]
 
 
 def parse_iso(ts: str | None) -> datetime | None:
@@ -156,7 +167,7 @@ async def execute_task_once(
             status="error",
             candidates=candidates,
             alert_result=alert_result,
-            error=str(exc),
+            error=_sanitize_error(str(exc)),
         )
         return {
             "ok": False,
@@ -165,7 +176,7 @@ async def execute_task_once(
             "candidates": candidates,
             "alert": alert_result,
             "run": run.to_dict(),
-            "error": str(exc),
+            "error": _sanitize_error(str(exc)),
         }
 
 
