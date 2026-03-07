@@ -31,6 +31,7 @@ class HotScanner:
         self._momentum_history: dict[tuple[str, str], list[tuple[float, float]]] = {}
         self._max_history_points = 20
         self._history_ttl_seconds = 2 * 60 * 60
+        self._max_history_keys = 2_000
 
     @staticmethod
     def _clip(value: float, low: float, high: float) -> float:
@@ -154,11 +155,40 @@ class HotScanner:
         fast_decay = half_life_min is not None and half_life_min <= 12.0 and decay_ratio <= 0.45
         return half_life_min, decay_ratio, fast_decay
 
+    def _prune_histories(self, now_s: float) -> None:
+        cutoff = now_s - self._history_ttl_seconds
+
+        stale_boost_keys = [key for key, (ts, _value) in self._boost_history.items() if ts < cutoff]
+        for key in stale_boost_keys:
+            self._boost_history.pop(key, None)
+
+        for key, history in list(self._momentum_history.items()):
+            trimmed = [entry for entry in history if entry[0] >= cutoff]
+            if not trimmed:
+                self._momentum_history.pop(key, None)
+                continue
+            if len(trimmed) > self._max_history_points:
+                trimmed = trimmed[-self._max_history_points :]
+            self._momentum_history[key] = trimmed
+
+        if len(self._boost_history) > self._max_history_keys:
+            for key, _value in sorted(self._boost_history.items(), key=lambda item: item[1][0])[:-self._max_history_keys]:
+                self._boost_history.pop(key, None)
+
+        if len(self._momentum_history) > self._max_history_keys:
+            oldest = sorted(
+                self._momentum_history.items(),
+                key=lambda item: item[1][-1][0] if item[1] else 0.0,
+            )
+            for key, _history in oldest[:-self._max_history_keys]:
+                self._momentum_history.pop(key, None)
+
     def _enrich_candidates(self, candidates: list[HotTokenCandidate]) -> None:
         if not candidates:
             return
 
         now_s = time.time()
+        self._prune_histories(now_s)
         chain_momentum: dict[str, list[float]] = defaultdict(list)
         chain_velocity: dict[str, list[float]] = defaultdict(list)
         metrics: dict[tuple[str, str], tuple[float, float, float, float, float]] = {}

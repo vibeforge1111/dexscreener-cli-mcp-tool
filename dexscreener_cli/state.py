@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,6 +10,11 @@ from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from .config import DEFAULT_CHAINS, ScanFilters
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 TaskStatus = Literal["todo", "running", "done", "blocked"]
 _VALID_TASK_STATUSES: frozenset[str] = frozenset({"todo", "running", "done", "blocked"})
@@ -222,9 +229,52 @@ class StateStore:
     def __init__(self, base_dir: Path | None = None) -> None:
         self.base_dir = base_dir or (Path.home() / ".dexscreener-cli")
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.lock_file = self.base_dir / ".state.lock"
         self.presets_file = self.base_dir / "presets.json"
         self.tasks_file = self.base_dir / "tasks.json"
         self.runs_file = self.base_dir / "runs.json"
+        self._state_lock = threading.RLock()
+        self._lock_depth = 0
+        self._lock_handle: Any | None = None
+
+    def _acquire_file_lock(self) -> None:
+        handle = self.lock_file.open("a+", encoding="utf-8")
+        handle.seek(0)
+        handle.write("0")
+        handle.flush()
+        handle.seek(0)
+        if "msvcrt" in globals():
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        self._lock_handle = handle
+
+    def _release_file_lock(self) -> None:
+        handle = self._lock_handle
+        if handle is None:
+            return
+        handle.seek(0)
+        if "msvcrt" in globals():
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+        self._lock_handle = None
+
+    def _lock_state(self) -> None:
+        self._state_lock.acquire()
+        if self._lock_depth == 0:
+            self._acquire_file_lock()
+        self._lock_depth += 1
+
+    def _unlock_state(self) -> None:
+        self._lock_depth -= 1
+        if self._lock_depth == 0:
+            self._release_file_lock()
+        self._state_lock.release()
+
+    def _with_state_lock(self) -> _StateLock:
+        return _StateLock(self)
 
     def _load_json(self, path: Path) -> dict[str, Any]:
         if not path.exists():
@@ -247,53 +297,59 @@ class StateStore:
 
     # Presets
     def list_presets(self) -> list[ScanPreset]:
-        data = self._load_json(self.presets_file)
-        rows = [ScanPreset.from_dict(p) for p in data.get("presets", [])]
-        rows.sort(key=lambda p: p.name.lower())
-        return rows
+        with self._with_state_lock():
+            data = self._load_json(self.presets_file)
+            rows = [ScanPreset.from_dict(p) for p in data.get("presets", [])]
+            rows.sort(key=lambda p: p.name.lower())
+            return rows
 
     def get_preset(self, name: str) -> ScanPreset | None:
-        wanted = name.strip().lower()
-        for preset in self.list_presets():
-            if preset.name.lower() == wanted:
-                return preset
-        return None
+        with self._with_state_lock():
+            wanted = name.strip().lower()
+            for preset in self.list_presets():
+                if preset.name.lower() == wanted:
+                    return preset
+            return None
 
     def save_preset(self, preset: ScanPreset) -> ScanPreset:
-        rows = self.list_presets()
-        existing = self.get_preset(preset.name)
-        if existing:
-            preset.created_at = existing.created_at
-        preset.updated_at = utc_now_iso()
-        new_rows = [p for p in rows if p.name.lower() != preset.name.lower()]
-        new_rows.append(preset)
-        new_rows.sort(key=lambda p: p.name.lower())
-        self._save_json(self.presets_file, {"presets": [p.to_dict() for p in new_rows]})
-        return preset
+        with self._with_state_lock():
+            rows = self.list_presets()
+            existing = self.get_preset(preset.name)
+            if existing:
+                preset.created_at = existing.created_at
+            preset.updated_at = utc_now_iso()
+            new_rows = [p for p in rows if p.name.lower() != preset.name.lower()]
+            new_rows.append(preset)
+            new_rows.sort(key=lambda p: p.name.lower())
+            self._save_json(self.presets_file, {"presets": [p.to_dict() for p in new_rows]})
+            return preset
 
     def delete_preset(self, name: str) -> bool:
-        rows = self.list_presets()
-        new_rows = [p for p in rows if p.name.lower() != name.strip().lower()]
-        if len(new_rows) == len(rows):
-            return False
-        self._save_json(self.presets_file, {"presets": [p.to_dict() for p in new_rows]})
-        return True
+        with self._with_state_lock():
+            rows = self.list_presets()
+            new_rows = [p for p in rows if p.name.lower() != name.strip().lower()]
+            if len(new_rows) == len(rows):
+                return False
+            self._save_json(self.presets_file, {"presets": [p.to_dict() for p in new_rows]})
+            return True
 
     # Tasks
     def list_tasks(self, status: TaskStatus | None = None) -> list[ScanTask]:
-        data = self._load_json(self.tasks_file)
-        rows = [ScanTask.from_dict(t) for t in data.get("tasks", [])]
-        if status:
-            rows = [t for t in rows if t.status == status]
-        rows.sort(key=lambda t: (t.status, t.updated_at), reverse=False)
-        return rows
+        with self._with_state_lock():
+            data = self._load_json(self.tasks_file)
+            rows = [ScanTask.from_dict(t) for t in data.get("tasks", [])]
+            if status:
+                rows = [t for t in rows if t.status == status]
+            rows.sort(key=lambda t: (t.status, t.updated_at), reverse=False)
+            return rows
 
     def get_task(self, name_or_id: str) -> ScanTask | None:
-        key = name_or_id.strip().lower()
-        for task in self.list_tasks():
-            if task.id.lower() == key or task.name.lower() == key:
-                return task
-        return None
+        with self._with_state_lock():
+            key = name_or_id.strip().lower()
+            for task in self.list_tasks():
+                if task.id.lower() == key or task.name.lower() == key:
+                    return task
+            return None
 
     def create_task(
         self,
@@ -305,64 +361,68 @@ class StateStore:
         alerts: dict[str, Any] | None = None,
         notes: str = "",
     ) -> ScanTask:
-        rows = self.list_tasks()
-        if any(t.name.lower() == name.lower() for t in rows):
-            raise ValueError(f"Task '{name}' already exists")
-        task = ScanTask.create(
-            name=name,
-            preset=preset,
-            filters=filters,
-            interval_seconds=interval_seconds,
-            alerts=alerts,
-            notes=notes,
-        )
-        rows.append(task)
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
-        return task
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            if any(t.name.lower() == name.lower() for t in rows):
+                raise ValueError(f"Task '{name}' already exists")
+            task = ScanTask.create(
+                name=name,
+                preset=preset,
+                filters=filters,
+                interval_seconds=interval_seconds,
+                alerts=alerts,
+                notes=notes,
+            )
+            rows.append(task)
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
+            return task
 
     def update_task_status(self, name_or_id: str, status: TaskStatus) -> ScanTask:
-        rows = self.list_tasks()
-        updated: ScanTask | None = None
-        for task in rows:
-            if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
-                task.status = status
-                task.updated_at = utc_now_iso()
-                updated = task
-                break
-        if not updated:
-            raise ValueError(f"Task '{name_or_id}' not found")
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
-        return updated
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            updated: ScanTask | None = None
+            for task in rows:
+                if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
+                    task.status = status
+                    task.updated_at = utc_now_iso()
+                    updated = task
+                    break
+            if not updated:
+                raise ValueError(f"Task '{name_or_id}' not found")
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
+            return updated
 
     def touch_task_run(self, name_or_id: str) -> ScanTask:
-        rows = self.list_tasks()
-        updated: ScanTask | None = None
-        for task in rows:
-            if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
-                now = utc_now_iso()
-                task.last_run_at = now
-                task.updated_at = now
-                updated = task
-                break
-        if not updated:
-            raise ValueError(f"Task '{name_or_id}' not found")
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
-        return updated
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            updated: ScanTask | None = None
+            for task in rows:
+                if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
+                    now = utc_now_iso()
+                    task.last_run_at = now
+                    task.updated_at = now
+                    updated = task
+                    break
+            if not updated:
+                raise ValueError(f"Task '{name_or_id}' not found")
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
+            return updated
 
     def touch_task_alert(self, name_or_id: str) -> ScanTask:
-        rows = self.list_tasks()
-        updated: ScanTask | None = None
-        for task in rows:
-            if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
-                now = utc_now_iso()
-                task.last_alert_at = now
-                task.updated_at = now
-                updated = task
-                break
-        if not updated:
-            raise ValueError(f"Task '{name_or_id}' not found")
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
-        return updated
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            updated: ScanTask | None = None
+            for task in rows:
+                if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
+                    now = utc_now_iso()
+                    task.last_alert_at = now
+                    task.updated_at = now
+                    updated = task
+                    break
+            if not updated:
+                raise ValueError(f"Task '{name_or_id}' not found")
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
+            return updated
 
     def update_task(
         self,
@@ -374,51 +434,55 @@ class StateStore:
         alerts: dict[str, Any] | None = None,
         notes: str | None = None,
     ) -> ScanTask:
-        rows = self.list_tasks()
-        updated: ScanTask | None = None
-        for task in rows:
-            if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
-                task.preset = preset
-                task.filters = filters
-                task.interval_seconds = interval_seconds
-                task.alerts = alerts
-                if notes is not None:
-                    task.notes = notes
-                task.updated_at = utc_now_iso()
-                updated = task
-                break
-        if not updated:
-            raise ValueError(f"Task '{name_or_id}' not found")
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
-        return updated
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            updated: ScanTask | None = None
+            for task in rows:
+                if task.id.lower() == name_or_id.lower() or task.name.lower() == name_or_id.lower():
+                    task.preset = preset
+                    task.filters = filters
+                    task.interval_seconds = interval_seconds
+                    task.alerts = alerts
+                    if notes is not None:
+                        task.notes = notes
+                    task.updated_at = utc_now_iso()
+                    updated = task
+                    break
+            if not updated:
+                raise ValueError(f"Task '{name_or_id}' not found")
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in rows]})
+            return updated
 
     def delete_task(self, name_or_id: str) -> bool:
-        rows = self.list_tasks()
-        key = name_or_id.strip().lower()
-        new_rows = [t for t in rows if t.id.lower() != key and t.name.lower() != key]
-        if len(new_rows) == len(rows):
-            return False
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in new_rows]})
-        return True
+        with self._with_state_lock():
+            rows = self.list_tasks()
+            key = name_or_id.strip().lower()
+            new_rows = [t for t in rows if t.id.lower() != key and t.name.lower() != key]
+            if len(new_rows) == len(rows):
+                return False
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in new_rows]})
+            return True
 
     # Runs
     def list_runs(self, task: str | None = None, limit: int = 200) -> list[TaskRunRecord]:
-        data = self._load_json(self.runs_file)
-        rows = [TaskRunRecord.from_dict(r) for r in data.get("runs", [])]
-        if task:
-            key = task.strip().lower()
-            rows = [r for r in rows if r.task_id.lower() == key or r.task_name.lower() == key]
-        rows.sort(key=lambda r: r.finished_at, reverse=True)
-        return rows[:limit]
+        with self._with_state_lock():
+            data = self._load_json(self.runs_file)
+            rows = [TaskRunRecord.from_dict(r) for r in data.get("runs", [])]
+            if task:
+                key = task.strip().lower()
+                rows = [r for r in rows if r.task_id.lower() == key or r.task_name.lower() == key]
+            rows.sort(key=lambda r: r.finished_at, reverse=True)
+            return rows[:limit]
 
     def append_run(self, run: TaskRunRecord) -> TaskRunRecord:
-        rows = self.list_runs(limit=10_000)
-        rows.append(run)
-        rows.sort(key=lambda r: r.finished_at, reverse=False)
-        # Keep file bounded for local usage.
-        rows = rows[-5000:]
-        self._save_json(self.runs_file, {"runs": [r.to_dict() for r in rows]})
-        return run
+        with self._with_state_lock():
+            rows = self.list_runs(limit=10_000)
+            rows.append(run)
+            rows.sort(key=lambda r: r.finished_at, reverse=False)
+            # Keep file bounded for local usage.
+            rows = rows[-5000:]
+            self._save_json(self.runs_file, {"runs": [r.to_dict() for r in rows]})
+            return run
 
     # State snapshot
     _REDACTED_ALERT_KEYS: ClassVar[frozenset[str]] = frozenset(
@@ -443,60 +507,75 @@ class StateStore:
         return {**task_dict, "alerts": cleaned}
 
     def export_bundle(self) -> dict[str, Any]:
-        return {
-            "version": 1,
-            "exported_at": utc_now_iso(),
-            "presets": [p.to_dict() for p in self.list_presets()],
-            "tasks": [self._redact_task(t.to_dict()) for t in self.list_tasks()],
-            "runs": [r.to_dict() for r in self.list_runs(limit=50_000)],
-        }
+        with self._with_state_lock():
+            return {
+                "version": 1,
+                "exported_at": utc_now_iso(),
+                "presets": [p.to_dict() for p in self.list_presets()],
+                "tasks": [self._redact_task(t.to_dict()) for t in self.list_tasks()],
+                "runs": [r.to_dict() for r in self.list_runs(limit=50_000)],
+            }
 
     def import_bundle(self, bundle: dict[str, Any], mode: Literal["merge", "replace"] = "merge") -> dict[str, int]:
-        if not isinstance(bundle, dict):
-            raise ValueError("Bundle must be a JSON object")
+        with self._with_state_lock():
+            if not isinstance(bundle, dict):
+                raise ValueError("Bundle must be a JSON object")
 
-        presets_raw = bundle.get("presets", [])
-        tasks_raw = bundle.get("tasks", [])
-        runs_raw = bundle.get("runs", [])
-        if not isinstance(presets_raw, list) or not isinstance(tasks_raw, list) or not isinstance(runs_raw, list):
-            raise ValueError("Bundle presets/tasks/runs must be arrays")
-        if len(runs_raw) > _MAX_IMPORTED_RUNS:
-            raise ValueError(f"Bundle exceeds max {_MAX_IMPORTED_RUNS} runs")
-        if not all(isinstance(item, dict) for item in presets_raw):
-            raise ValueError("Bundle presets must contain only objects")
-        if not all(isinstance(item, dict) for item in tasks_raw):
-            raise ValueError("Bundle tasks must contain only objects")
-        if not all(isinstance(item, dict) for item in runs_raw):
-            raise ValueError("Bundle runs must contain only objects")
-        if any(str(item.get("status", "todo")) not in _VALID_TASK_STATUSES for item in tasks_raw):
-            raise ValueError("Bundle contains invalid task status")
+            presets_raw = bundle.get("presets", [])
+            tasks_raw = bundle.get("tasks", [])
+            runs_raw = bundle.get("runs", [])
+            if not isinstance(presets_raw, list) or not isinstance(tasks_raw, list) or not isinstance(runs_raw, list):
+                raise ValueError("Bundle presets/tasks/runs must be arrays")
+            if len(runs_raw) > _MAX_IMPORTED_RUNS:
+                raise ValueError(f"Bundle exceeds max {_MAX_IMPORTED_RUNS} runs")
+            if not all(isinstance(item, dict) for item in presets_raw):
+                raise ValueError("Bundle presets must contain only objects")
+            if not all(isinstance(item, dict) for item in tasks_raw):
+                raise ValueError("Bundle tasks must contain only objects")
+            if not all(isinstance(item, dict) for item in runs_raw):
+                raise ValueError("Bundle runs must contain only objects")
+            if any(str(item.get("status", "todo")) not in _VALID_TASK_STATUSES for item in tasks_raw):
+                raise ValueError("Bundle contains invalid task status")
 
-        presets_in = [ScanPreset.from_dict(p) for p in presets_raw]
-        tasks_in = [ScanTask.from_dict(t) for t in tasks_raw]
-        runs_in = [TaskRunRecord.from_dict(r) for r in runs_raw]
+            presets_in = [ScanPreset.from_dict(p) for p in presets_raw]
+            tasks_in = [ScanTask.from_dict(t) for t in tasks_raw]
+            runs_in = [TaskRunRecord.from_dict(r) for r in runs_raw]
 
-        if mode == "replace":
-            self._save_json(self.presets_file, {"presets": [p.to_dict() for p in presets_in]})
-            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in tasks_in]})
-            self._save_json(self.runs_file, {"runs": [r.to_dict() for r in runs_in]})
-            return {"presets": len(presets_in), "tasks": len(tasks_in), "runs": len(runs_in)}
+            if mode == "replace":
+                self._save_json(self.presets_file, {"presets": [p.to_dict() for p in presets_in]})
+                self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in tasks_in]})
+                self._save_json(self.runs_file, {"runs": [r.to_dict() for r in runs_in]})
+                return {"presets": len(presets_in), "tasks": len(tasks_in), "runs": len(runs_in)}
 
-        # merge mode
-        preset_map = {p.name.lower(): p for p in self.list_presets()}
-        for p in presets_in:
-            preset_map[p.name.lower()] = p
-        merged_presets = sorted(preset_map.values(), key=lambda p: p.name.lower())
-        self._save_json(self.presets_file, {"presets": [p.to_dict() for p in merged_presets]})
+            # merge mode
+            preset_map = {p.name.lower(): p for p in self.list_presets()}
+            for p in presets_in:
+                preset_map[p.name.lower()] = p
+            merged_presets = sorted(preset_map.values(), key=lambda p: p.name.lower())
+            self._save_json(self.presets_file, {"presets": [p.to_dict() for p in merged_presets]})
 
-        task_map = {t.name.lower(): t for t in self.list_tasks()}
-        for t in tasks_in:
-            task_map[t.name.lower()] = t
-        merged_tasks = list(task_map.values())
-        self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in merged_tasks]})
+            task_map = {t.name.lower(): t for t in self.list_tasks()}
+            for t in tasks_in:
+                task_map[t.name.lower()] = t
+            merged_tasks = list(task_map.values())
+            self._save_json(self.tasks_file, {"tasks": [t.to_dict() for t in merged_tasks]})
 
-        run_map = {r.id: r for r in self.list_runs(limit=50_000)}
-        for r in runs_in:
-            run_map[r.id] = r
-        merged_runs = sorted(run_map.values(), key=lambda r: r.finished_at, reverse=False)[-5000:]
-        self._save_json(self.runs_file, {"runs": [r.to_dict() for r in merged_runs]})
-        return {"presets": len(merged_presets), "tasks": len(merged_tasks), "runs": len(merged_runs)}
+            run_map = {r.id: r for r in self.list_runs(limit=50_000)}
+            for r in runs_in:
+                run_map[r.id] = r
+            merged_runs = sorted(run_map.values(), key=lambda r: r.finished_at, reverse=False)[-5000:]
+            self._save_json(self.runs_file, {"runs": [r.to_dict() for r in merged_runs]})
+            return {"presets": len(merged_presets), "tasks": len(merged_tasks), "runs": len(merged_runs)}
+
+
+class _StateLock:
+    def __init__(self, store: StateStore) -> None:
+        self._store = store
+
+    def __enter__(self) -> None:
+        self._store._lock_state()
+        return None
+
+    def __exit__(self, *_: Any) -> None:
+        self._store._unlock_state()
+        return None

@@ -271,6 +271,7 @@ async def fetch_holder_count(
     own_client = client is None
     http_client = client or httpx.AsyncClient(
         timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
+        trust_env=False,
     )
 
     try:
@@ -355,6 +356,7 @@ async def hydrate_pair_holders(pairs: list[PairSnapshot], *, max_pairs: int | No
     semaphore = asyncio.Semaphore(3)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
+        trust_env=False,
     ) as client:
         async def worker(chain: str, original_token: str, bucket: list[PairSnapshot]) -> None:
             async with semaphore:
@@ -400,6 +402,7 @@ async def hydrate_token_rows_with_holders(
     semaphore = asyncio.Semaphore(3)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(HOLDER_REQUEST_TIMEOUT_SECONDS),
+        trust_env=False,
     ) as client:
         async def worker(chain: str, original_token: str, bucket: list[dict[str, object]]) -> None:
             async with semaphore:

@@ -60,6 +60,7 @@ class DexScreenerClient:
             base_url=API_BASE,
             timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS),
             headers={"Accept": "application/json"},
+            trust_env=False,
         )
         self._limiters = {
             "slow": SlidingWindowLimiter(RATE_LIMITS_RPM["slow"]),
@@ -68,6 +69,7 @@ class DexScreenerClient:
         self._cache_ttl = cache_ttl_seconds
         self._cache: dict[str, tuple[float, Any]] = {}
         self._cache_lock = asyncio.Lock()
+        self._bucket_state_lock = asyncio.Lock()
         self._bucket_pause_until: dict[str, float] = {"slow": 0.0, "fast": 0.0}
         self._bucket_penalty_seconds: dict[str, float] = {"slow": 0.0, "fast": 0.0}
         self._stats_lock = asyncio.Lock()
@@ -122,6 +124,25 @@ class DexScreenerClient:
                 self._stats["bucket_wait_seconds"] = waits
             waits[bucket] = float(waits.get(bucket, 0.0)) + max(seconds, 0.0)
 
+    async def _get_bucket_pause_until(self, bucket: str) -> float:
+        async with self._bucket_state_lock:
+            return float(self._bucket_pause_until.get(bucket, 0.0))
+
+    async def _record_bucket_cooldown(self, bucket: str, retry_after: float | None) -> None:
+        async with self._bucket_state_lock:
+            base_penalty = self._bucket_penalty_seconds.get(bucket, 0.0)
+            next_penalty = max(base_penalty * 2.0, 1.5)
+            next_penalty = min(next_penalty, 30.0)
+            self._bucket_penalty_seconds[bucket] = next_penalty
+            cooldown = max(retry_after or 0.0, next_penalty)
+            # Jitter avoids synchronized retry bursts.
+            cooldown += random.uniform(0.05, 0.35)
+            self._bucket_pause_until[bucket] = max(self._bucket_pause_until.get(bucket, 0.0), monotonic() + cooldown)
+
+    async def _decay_bucket_penalty(self, bucket: str) -> None:
+        async with self._bucket_state_lock:
+            self._bucket_penalty_seconds[bucket] = max(self._bucket_penalty_seconds.get(bucket, 0.0) * 0.65, 0.0)
+
     def _retry_after_seconds(self, response: httpx.Response) -> float | None:
         value = response.headers.get("Retry-After")
         if not value:
@@ -158,7 +179,7 @@ class DexScreenerClient:
         attempt = 0
         while True:
             now = monotonic()
-            pause_until = self._bucket_pause_until.get(bucket, 0.0)
+            pause_until = await self._get_bucket_pause_until(bucket)
             if now < pause_until:
                 wait_for = pause_until - now
                 await self._add_bucket_wait(bucket, wait_for)
@@ -170,14 +191,7 @@ class DexScreenerClient:
             if response.status_code == 429:
                 await self._bump_stat("throttled_429")
                 retry_after = self._retry_after_seconds(response)
-                base_penalty = self._bucket_penalty_seconds.get(bucket, 0.0)
-                next_penalty = max(base_penalty * 2.0, 1.5)
-                next_penalty = min(next_penalty, 30.0)
-                self._bucket_penalty_seconds[bucket] = next_penalty
-                cooldown = max(retry_after or 0.0, next_penalty)
-                # Jitter avoids synchronized retry bursts.
-                cooldown += random.uniform(0.05, 0.35)
-                self._bucket_pause_until[bucket] = max(self._bucket_pause_until.get(bucket, 0.0), monotonic() + cooldown)
+                await self._record_bucket_cooldown(bucket, retry_after)
             if response.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
                 await self._bump_stat("retries")
                 sleep_for = RETRY_BACKOFF_SECONDS * (2**attempt)
@@ -189,7 +203,7 @@ class DexScreenerClient:
                 await self._bump_stat("errors")
             response.raise_for_status()
             # Decay bucket penalty after healthy responses.
-            self._bucket_penalty_seconds[bucket] = max(self._bucket_penalty_seconds.get(bucket, 0.0) * 0.65, 0.0)
+            await self._decay_bucket_penalty(bucket)
             payload = response.json()
             await self._cache_set(path, payload)
             return payload
