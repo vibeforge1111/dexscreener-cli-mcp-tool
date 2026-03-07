@@ -495,14 +495,14 @@ def render_scan_summary(candidates: list[HotTokenCandidate]) -> Panel:
     top_txt.append("  ", style="")
     top_txt.append_text(_momentum_text(top.pair.price_change_h1))
 
-    grid.add_row("Tokens Found", tokens_txt, _safe_text(VLINE), "Top Mover", top_txt)
+    grid.add_row("Tokens Found", tokens_txt, _safe_text(VLINE), "Top Mover 1h", top_txt)
 
     # Row 2: Total 24h Vol | Buy Pressure
     buy_txt = Text()
     buy_bar_w = 8
     buy_filled = int(round(buy_ratio * buy_bar_w))
     sell_filled = buy_bar_w - buy_filled
-    buy_style = C_GREEN if buy_ratio >= 0.55 else C_GOLD if buy_ratio >= 0.45 else C_RED
+    buy_style = C_GREEN if buy_ratio >= 0.55 else C_GREEN if buy_ratio >= 0.45 else C_RED
     sell_style = C_RED
     buy_txt.append(_safe_text(BAR_FILL * buy_filled), style=buy_style)
     buy_txt.append(_safe_text(BAR_FILL * sell_filled), style=sell_style)
@@ -1096,8 +1096,19 @@ def _truncate_addr(addr: str, length: int = 8) -> str:
     return f"{addr[:length]}..{addr[-length:]}"
 
 
+def _addr_trust_style(pair: PairSnapshot) -> str:
+    """Return white for legit-looking tokens, dim grey for others."""
+    holders = pair.holders_count
+    liq = pair.liquidity_usd
+    txns = pair.txns_h24
+    if holders is not None and holders >= 10_000 and liq >= 100_000:
+        return C_WHITE
+    if holders is not None and holders >= 1_000 and liq >= 50_000 and txns >= 100:
+        return C_WHITE
+    return C_DIM
+
+
 def render_search_table(pairs: list[PairSnapshot]) -> Table:
-    compact = _compact_level() >= 1
     table = Table(
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Search Results[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
@@ -1108,25 +1119,22 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     )
     table.add_column("Chain", min_width=5)
     table.add_column("Token", style=f"bold {C_GOLD}")
-    table.add_column("Address", style=C_DIM, no_wrap=True)
-    table.add_column("1h", justify="right", min_width=10)
+    table.add_column("Address", no_wrap=True)
     table.add_column("24h", justify="right", min_width=10)
     table.add_column("Vol 24h", justify="right")
     table.add_column("Liq", justify="right")
     table.add_column("Holders", justify="right")
-    table.add_column("Trust", min_width=10)
 
     for pair in pairs:
+        addr_style = _addr_trust_style(pair)
         table.add_row(
             _chain_text(pair.chain_id),
             Text(_safe_text(pair.base_symbol), style=f"bold {C_GOLD}"),
-            Text(_safe_text(pair.base_address), style=C_DIM, no_wrap=True),
-            _momentum_text(pair.price_change_h1),
+            Text(_safe_text(pair.base_address), style=addr_style, no_wrap=True),
             _momentum_text(pair.price_change_h24),
             fmt_usd(pair.volume_h24),
             fmt_usd(pair.liquidity_usd),
             holders_text(pair.holders_count),
-            _trust_badge(pair),
         )
     if not pairs:
         cols = len(table.columns)
