@@ -19,38 +19,64 @@ Scans hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Scores them b
 
 ## Quick Install
 
+You need **Python 3.11+** and **Git** installed. Then follow these 3 steps:
+
+### Step 1: Clone the repo
+
+Open a terminal (Command Prompt, PowerShell, or Terminal) and paste this:
+
 ```bash
 git clone https://github.com/vibeforge1111/dexscreener-cli-mcp-tool.git
 cd dexscreener-cli-mcp-tool
 ```
 
-**Windows:**
+### Step 2: Run the installer
+
+**Windows** - paste this in the same terminal:
 ```
 install.bat
 ```
 
-**Mac/Linux:**
+**Mac / Linux** - paste this instead:
 ```bash
 chmod +x install.sh && ./install.sh
 ```
 
-**Manual:**
+This creates a virtual environment and installs everything. Takes about 30 seconds.
+
+<details>
+<summary>Manual install (if the script doesn't work)</summary>
+
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e .
 ```
 
----
+Activate the environment:
+```bash
+# Mac / Linux:
+source .venv/bin/activate
 
-## First Run
+# Windows Command Prompt:
+.venv\Scripts\activate.bat
+
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+```
+
+Then install:
+```bash
+pip install -e .
+```
+</details>
+
+### Step 3: Run your first scan
 
 ```bash
-ds setup       # 5-question wizard to calibrate your scanner
+ds setup       # 5-question wizard - picks your chains, style, and filters
 ds hot         # Scan hot tokens with your settings
 ```
 
-The setup wizard asks about your chains, trading style, and filter preferences. Your choices are saved and auto-loaded on every scan.
+That's it. The setup wizard saves your choices and auto-loads them on every scan.
 
 ---
 
