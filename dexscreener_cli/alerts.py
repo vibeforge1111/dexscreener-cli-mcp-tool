@@ -1,13 +1,68 @@
 from __future__ import annotations
 
+import ipaddress
+import socket
 from datetime import UTC, datetime
 from typing import Any
 from collections import UserDict
+from urllib.parse import urlparse
 
 import httpx
 
 from .models import HotTokenCandidate
 from .state import ScanTask
+
+# Domains that are always allowed for webhook delivery.
+_ALLOWED_WEBHOOK_HOSTS: frozenset[str] = frozenset(
+    {
+        "discord.com",
+        "discordapp.com",
+        "api.telegram.org",
+    }
+)
+
+
+def validate_webhook_url(url: str) -> str:
+    """Validate a webhook URL to prevent SSRF attacks.
+
+    Raises ValueError if the URL is invalid, uses an unsafe scheme,
+    or resolves to a private/reserved IP address.
+    Returns the validated URL string.
+    """
+    parsed = urlparse(url)
+
+    # Must be https (or http only for explicitly allowed hosts).
+    if parsed.scheme not in ("https", "http"):
+        raise ValueError(f"Webhook URL must use https:// scheme, got {parsed.scheme}://")
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("Webhook URL has no hostname")
+
+    if parsed.scheme == "http" and hostname not in _ALLOWED_WEBHOOK_HOSTS:
+        raise ValueError("Webhook URL must use https:// (http only allowed for discord.com, api.telegram.org)")
+
+    # Block localhost and common loopback names.
+    blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"}
+    if hostname in blocked_hosts:
+        raise ValueError("Webhook URL must not point to localhost")
+
+    # Block cloud metadata endpoints.
+    metadata_ips = {"169.254.169.254", "100.100.100.200", "fd00:ec2::254"}
+    if hostname in metadata_ips:
+        raise ValueError("Webhook URL must not point to cloud metadata endpoints")
+
+    # Resolve hostname and check if it maps to a private/reserved IP.
+    try:
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for _family, _type, _proto, _canonname, sockaddr in infos:
+            addr = ipaddress.ip_address(sockaddr[0])
+            if addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local:
+                raise ValueError(f"Webhook URL resolves to private/reserved address: {addr}")
+    except socket.gaierror:
+        pass  # Let httpx handle DNS failures at request time.
+
+    return url
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
@@ -171,6 +226,7 @@ async def _dispatch_channels(
         webhook = alerts.get("webhook_url")
         if webhook:
             try:
+                validate_webhook_url(webhook)
                 resp = await client.post(
                     webhook,
                     json={
@@ -211,6 +267,7 @@ async def _dispatch_channels(
         discord = alerts.get("discord_webhook_url")
         if discord:
             try:
+                validate_webhook_url(discord)
                 fields = []
                 for c in candidates[:3]:
                     fields.append(
@@ -247,6 +304,9 @@ async def _dispatch_channels(
         tg_chat = alerts.get("telegram_chat_id")
         if tg_token and tg_chat:
             try:
+                # Validate token contains only safe characters (digits, colon, alphanumeric, dash, underscore).
+                if not all(c.isalnum() or c in ":-_" for c in str(tg_token)):
+                    raise ValueError("Telegram bot token contains invalid characters")
                 url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
                 resp = await client.post(
                     url,
