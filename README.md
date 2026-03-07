@@ -96,15 +96,49 @@ That's it. The setup wizard saves your choices and auto-loads them on every scan
 
 ### Real-Time Live Dashboards
 
-These run continuously and auto-refresh every few seconds. Press `Ctrl+C` to stop.
+Three live modes that auto-refresh and keep your terminal updated. Press `Ctrl+C` to stop any of them.
 
-| Command | What it does |
-|---------|-------------|
-| `ds watch` | Live hot runner board - refreshes every 7s |
-| `ds new-runners-watch` | Live new runner tracker with keyboard chain switching |
-| `ds alpha-drops-watch` | Live alpha drop scanner with built-in alerts |
+**`ds watch`** - Live hot runner board
 
-All live modes support `--interval` to set refresh speed and `--limit` to control how many tokens show.
+The simplest live mode. Shows the same hot runner table as `ds hot`, but refreshes automatically.
+
+```bash
+ds watch                                        # All chains, refreshes every 7s
+ds watch --chains solana --limit 10 --interval 5  # Solana only, 5s refresh
+ds watch --preset my-degen                       # Use your custom profile
+```
+
+**`ds new-runners-watch`** - Live new runner tracker
+
+Full-screen dashboard with keyboard controls. Shows new tokens with rank movers, flow panels, and spotlight cards.
+
+```bash
+ds new-runners-watch --chain solana              # Watch Solana runners
+ds new-runners-watch --chain base --interval 6   # Watch Base, 6s refresh
+ds new-runners-watch --chain solana --watch-chains solana,base,ethereum  # Enable chain switching
+```
+
+Keyboard shortcuts while running:
+- `1-9` - Switch between chains (if `--watch-chains` is set)
+- `s` - Cycle sort mode (score / readiness / relative strength / volume / momentum)
+- `j/k` - Select a row up/down
+- `c` - Copy selected token address to clipboard
+
+**`ds alpha-drops-watch`** - Live alpha drop scanner with alerts
+
+Same as new-runners-watch but focused on breakout-ready tokens. Can send alerts directly to Discord/Telegram as it finds them.
+
+```bash
+ds alpha-drops-watch --chains solana,base        # Watch for alpha drops
+ds alpha-drops-watch --chains solana --discord-webhook-url https://discord.com/api/webhooks/YOUR/WEBHOOK  # With Discord alerts
+ds alpha-drops-watch --chains solana --alert-min-score 75 --alert-cooldown-seconds 120  # Alert only high scores, 2min cooldown
+```
+
+**Tips for all live modes:**
+- Use `--interval 5` for faster updates (default is 6-7 seconds)
+- Use `--limit` to control how many tokens show (fewer = faster scans)
+- Use `--profile discovery` to cast a wider net and see more tokens
+- Use `--no-screen` (on new-runners-watch and alpha-drops-watch) to avoid fullscreen mode
 
 ### Custom Scan Profiles
 
@@ -280,19 +314,26 @@ Then ask in natural language: "What's hot on Solana?" or "Find new tokens on Bas
 
 ---
 
-## MCP Server
+## MCP Server - Use It With AI Agents
 
-The MCP server exposes all scanning functionality to AI agents (Claude, Codex, etc.).
+### Why use the MCP server?
 
-### Start the server
+The MCP server lets you talk to your scanner in plain English through any AI agent. Instead of remembering CLI flags, you just ask:
 
-```bash
-dexscreener-mcp
-```
+- "What's pumping on Solana right now?"
+- "Find me degen plays on Base with low liquidity"
+- "Save a preset called sol-degen for Solana discovery mode"
+- "Set up alerts for when something scores above 80"
 
-### Claude Desktop config
+The agent calls the right MCP tool with the right parameters. You get the same data as the CLI, but through conversation.
 
-Add to your `claude_desktop_config.json`:
+### How to set it up
+
+**Step 1:** Make sure the CLI is installed (see [Quick Install](#quick-install) above).
+
+**Step 2:** Add the MCP server to your AI agent's config.
+
+**Claude Desktop** - add to your `claude_desktop_config.json`:
 
 ```json
 {
@@ -305,56 +346,88 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-On Mac/Linux use `.venv/bin/dexscreener-mcp` instead.
+On Mac/Linux use `.venv/bin/dexscreener-mcp` instead of `.venv/Scripts/dexscreener-mcp`.
 
-### MCP Tools
+**Claude Code** - add to your `.mcp.json` or project settings:
 
-| Tool | Description |
+```json
+{
+  "mcpServers": {
+    "dexscreener": {
+      "command": "path/to/dexscreener-cli-mcp-tool/.venv/Scripts/dexscreener-mcp"
+    }
+  }
+}
+```
+
+**Any MCP-compatible agent** (Codex, OpenClaw, etc.) - point it at the `dexscreener-mcp` binary in the `.venv` folder. It communicates over stdio.
+
+**Step 3:** Start talking.
+
+### Natural language examples
+
+Once connected, just ask in plain English:
+
+| You say | What happens |
+|---------|-------------|
+| "What's hot right now?" | Scans all chains and returns top scored tokens |
+| "Show me Solana tokens" | Scans Solana only |
+| "Find tokens on Base with high volume" | Scans Base with volume-focused filters |
+| "Search for pepe" | Searches Dexscreener for pepe tokens |
+| "Tell me about this token: 0x..." | Inspects the specific token address |
+| "What's the score breakdown for BONK?" | Searches + inspects with analytics |
+| "Save my current settings as degen-mode" | Creates a named preset |
+| "Show me my presets" | Lists all saved presets |
+| "Set up a task that scans Solana every minute" | Creates a scheduled task |
+| "Add Discord alerts to my task" | Configures alert channels on a task |
+| "Test my alerts" | Sends a test alert through configured channels |
+| "What are the API limits looking like?" | Shows rate budget and usage stats |
+| "Export my config" | Exports all presets, tasks, and history as JSON |
+
+The agent figures out which MCP tool to call and what parameters to use. You don't need to know the tool names.
+
+### All 14 MCP tools
+
+For reference, these are the tools the agent has access to:
+
+| Tool | What it does |
 |------|-------------|
 | `scan_hot_tokens` | Scan and rank hot tokens by chain with scoring |
-| `search_pairs` | Search Dexscreener pairs by name/symbol/address |
-| `inspect_token` | Deep-dive on a token with concentration proxies |
-| `save_preset` | Save a named scan preset |
-| `list_presets` | List all saved presets |
+| `search_pairs` | Search pairs by name, symbol, or address |
+| `inspect_token` | Deep-dive on a specific token |
+| `save_preset` | Save a named filter preset |
+| `list_presets` | List saved presets |
 | `create_task` | Create a scheduled scan task with alerts |
 | `list_tasks` | List all scan tasks |
-| `run_task_scan` | Run a task scan and return ranked results |
-| `run_due_tasks` | Run one scheduler cycle for all due tasks |
-| `test_task_alert` | Send a test alert through task channels |
-| `list_task_runs` | List task run history |
-| `export_state_bundle` | Export all presets/tasks/runs as JSON |
-| `import_state_bundle` | Import a state bundle |
-| `get_rate_budget_stats` | Get API rate limit and budget stats |
+| `run_task_scan` | Run a task scan manually |
+| `run_due_tasks` | Run all due scheduled tasks |
+| `test_task_alert` | Test alert delivery |
+| `list_task_runs` | View task run history |
+| `export_state_bundle` | Export all config as JSON |
+| `import_state_bundle` | Import a config bundle |
+| `get_rate_budget_stats` | Check API rate limits and usage |
 
-### MCP Resources
-
-| URI | Content |
-|-----|---------|
-| `dexscreener://profiles` | Available scan profiles with thresholds |
-| `dexscreener://presets` | Saved scan presets |
-| `dexscreener://tasks` | Saved scan tasks |
-
-### MCP Prompts
-
-| Prompt | Purpose |
-|--------|---------|
-| `alpha_scan_plan` | Generate an execution-ready scan plan |
-| `runner_triage` | Triage a token candidate for momentum trading |
+Plus 3 resources (`dexscreener://profiles`, `dexscreener://presets`, `dexscreener://tasks`) and 2 prompts (`alpha_scan_plan`, `runner_triage`).
 
 ---
 
-## AI Skill Usage
+## AI Skill File
 
-This tool works as a skill for AI coding agents. Load the `SKILL.md` file to teach any agent how to use the CLI and MCP tools with natural language.
+For AI coding agents that use skill files (Claude Code, Codex, OpenClaw), load `SKILL.md` from this repo. It teaches the agent:
 
-**Example natural language queries an agent can handle:**
-- "What are the hottest tokens on Solana right now?"
-- "Find me new tokens on Base with high volume"
-- "Set up a scan task with Discord alerts for Solana alpha"
-- "Search for pepe tokens and show me the top results"
-- "What's the liquidity and volume for this token address?"
+- When to activate (trigger phrases like "what's hot", "find me alpha", etc.)
+- How to map natural language to the right tool calls
+- Chain identification ("Solana" -> `solana`, "BSC" -> `bsc`)
+- Filter profile selection based on user intent
+- How to explain scores and present results
+- Error handling and troubleshooting
 
-See `SKILL.md` for the full skill specification.
+```bash
+# Point your agent at the skill file:
+SKILL.md
+```
+
+See `SKILL.md` for the full specification.
 
 ---
 
