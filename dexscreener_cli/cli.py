@@ -24,7 +24,7 @@ from rich.text import Text
 from .alerts import send_alerts, send_test_alert
 from .client import DexScreenerClient
 from .config import DEFAULT_CHAINS, ScanFilters
-from .holders import hydrate_token_rows_with_holders
+from .holders import hydrate_pair_holders, hydrate_token_rows_with_holders
 from .models import HotTokenCandidate, PairSnapshot
 from .scanner import HotScanner
 from .state import ScanPreset, ScanTask, StateStore, utc_now_iso
@@ -633,7 +633,6 @@ def _render_scan_board(candidates: list[HotTokenCandidate], filters: ScanFilters
             min_txns_h1=filters.min_txns_h1,
         )
     )
-    console.print(Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]))
     console.print(render_status_footer(chains=filters.chains))
 
 
@@ -734,83 +733,74 @@ def _render_new_launches_board(
     min_txns_h24: int,
 ) -> None:
     compact = _terminal_width() < 145
-    table = Table(
-        title=(
-            f"[bold bright_white]Top New Coins[/bold bright_white]  "
-            f"[cyan]chain={chain}[/cyan]  "
-            f"[yellow]window={days}d[/yellow]  "
-            f"[green]liq>={fmt_usd(min_liquidity_usd)}[/green]  "
-            f"[green]vol24>={fmt_usd(min_volume_h24_usd)}[/green]  "
-            f"[magenta]tx1h>={min_txns_h1}[/magenta]  "
-            f"[magenta]tx24h>={min_txns_h24}[/magenta]"
-        ),
-        box=box.ROUNDED,
-        header_style="bold bright_white",
-        row_styles=["none", "dim"],
+    chain_lbl = chain.upper()[:4]
+    title = (
+        f"[bold #e5e7eb]Top New Coins[/bold #e5e7eb]  "
+        f"[#6b7280]{chain_lbl}  window={days}d  "
+        f"liq>={fmt_usd(min_liquidity_usd)}  vol>={fmt_usd(min_volume_h24_usd)}  "
+        f"tx1h>={min_txns_h1}  tx24h>={min_txns_h24}[/#6b7280]"
     )
-    table.add_column("#", justify="right")
-    table.add_column("Token", style="bold yellow")
+    table = Table(
+        title=title,
+        box=box.SIMPLE_HEAVY,
+        header_style="bold #e5e7eb",
+        row_styles=["", "#4b5563"],
+        border_style="#3a3d4a",
+        title_style="",
+    )
+    table.add_column("#", justify="right", width=3)
+    table.add_column("Token", style="bold #fbbf24", min_width=8)
     table.add_column("Age", justify="right")
-    table.add_column("1h", justify="right")
-    table.add_column("24h Vol", justify="right")
-    table.add_column("1h Txns", justify="right")
-    table.add_column("Liquidity", justify="right")
+    table.add_column("1h", justify="right", min_width=10)
+    table.add_column("24h", justify="right", min_width=10)
+    table.add_column("24h Vol", justify="right", min_width=9)
+    table.add_column("Txns", justify="right")
+    table.add_column("Liquidity", justify="right", min_width=9)
     table.add_column("Holders", justify="right")
     if not compact:
-        table.add_column("Price", justify="right")
-        table.add_column("24h", justify="right")
-        table.add_column("24h Txns", justify="right")
-        table.add_column("Dex")
+        table.add_column("MCap", justify="right", min_width=9)
 
     for idx, row in enumerate(rows, start=1):
         symbol = str(row.get("symbol", "?"))
         age_hours = _as_float(row.get("ageHours"), 0.0)
-        age_style = "bright_cyan" if age_hours <= 24 else "yellow" if age_hours <= 72 else "white"
-        price = _as_float(row.get("priceUsd"))
+        if age_hours < 1:
+            age_txt = Text(f"{age_hours * 60:.0f}m", style="bold #67e8f9")
+        elif age_hours < 24:
+            age_txt = Text(f"{age_hours:.1f}h", style="#67e8f9")
+        elif age_hours < 72:
+            age_txt = Text(f"{age_hours:.1f}h", style="#d1d5db")
+        else:
+            age_txt = Text(f"{age_hours / 24:.1f}d", style="#4b5563")
         vol24 = _as_float(row.get("volumeH24"))
         tx1h = _as_int(row.get("txnsH1"))
-        tx24h = _as_int(row.get("txnsH24"))
         liq = _as_float(row.get("liquidityUsd"))
         holders_count = _as_int(row.get("holdersCount"), -1)
-        table.add_row(
+        mcap = _as_float(row.get("marketCap")) or _as_float(row.get("fdv"))
+
+        base_row: list[object] = [
             str(idx),
             symbol,
-            Text(f"{age_hours:.1f}h", style=age_style),
+            age_txt,
             _pct_or_na(_as_float(row.get("priceChangeH1")), txns_h1=tx1h),
-            Text(fmt_usd(vol24), style="bright_cyan" if vol24 >= 100_000 else "cyan"),
-            Text(str(tx1h), style="bright_white" if tx1h >= 100 else "white"),
-            Text(fmt_usd(liq), style="green" if liq >= 50_000 else "yellow" if liq >= 10_000 else "red"),
+            _pct_text(_as_float(row.get("priceChangeH24"))),
+            fmt_usd(vol24),
+            str(tx1h),
+            fmt_usd(liq),
             holders_text(holders_count if holders_count >= 0 else None),
-            *((Text(f"${price:,.8f}" if price < 0.01 else f"${price:,.6f}", style="white"), _pct_text(_as_float(row.get("priceChangeH24"))), Text(str(tx24h), style="bright_white" if tx24h >= 250 else "white"), str(row.get("dexId", ""))) if not compact else ()),
-        )
+        ]
+        if not compact:
+            base_row.append(fmt_usd(mcap))
+        table.add_row(*base_row)
 
     if not rows:
-        if compact:
-            table.add_row("-", "No new coins matched filters", "-", "-", "-", "-", "-", "-")
-        else:
-            table.add_row("-", "No new coins matched filters", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
+        cols = len(table.columns)
+        fallback = ["-"] * cols
+        fallback[1] = "No new coins matched filters"
+        table.add_row(*fallback)
 
-    total_vol = sum(_as_float(r.get("volumeH24")) for r in rows)
-    total_liq = sum(_as_float(r.get("liquidityUsd")) for r in rows)
-    known_holders = [_as_int(r.get("holdersCount"), -1) for r in rows]
-    known_holders = [h for h in known_holders if h >= 0]
-    holder_hint = fmt_holders(int(sum(known_holders) / len(known_holders))) if known_holders else "n/a"
-    avg_age = sum(_as_float(r.get("ageHours")) for r in rows) / len(rows) if rows else 0.0
-    summary = Panel(
-        Text(
-            f"Rows: {len(rows)}\n"
-            f"24h volume sum: {fmt_usd(total_vol)}\n"
-            f"Liquidity sum: {fmt_usd(total_liq)}\n"
-            f"Avg holders: {holder_hint}\n"
-            f"Average age: {avg_age:.1f}h"
-        ),
-        title="[bold bright_white]New Coin Snapshot[/bold bright_white]",
-        border_style="bright_blue",
-        box=box.ROUNDED,
-    )
     console.print(build_header())
     console.print(table)
-    console.print(summary)
+    console.print(render_status_footer(chains=(chain,)))
 
 
 def _new_runner_rank(candidate: HotTokenCandidate) -> tuple[float, float, int, float]:
@@ -1523,7 +1513,6 @@ def watch(
                             min_volume_h24_usd=filters.min_volume_h24_usd,
                             min_txns_h1=filters.min_txns_h1,
                         ),
-                        Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]),
                         render_status_footer(
                             interval=interval,
                             chains=filters.chains,
@@ -1597,6 +1586,7 @@ def search(
         async with DexScreenerClient() as client:
             scanner = HotScanner(client)
             pairs = await scanner.search(query=query, limit=limit)
+            await hydrate_pair_holders(pairs, max_pairs=limit)
             console.print(build_header())
             console.print(render_search_table(pairs))
 

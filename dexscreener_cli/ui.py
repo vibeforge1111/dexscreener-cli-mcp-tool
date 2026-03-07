@@ -633,22 +633,11 @@ def render_hot_table(
     table.add_column("Holders", justify="right")
     if not compact:
         table.add_column("MCap", justify="right", min_width=9)
-        table.add_column("Buy%", justify="right", width=5)
-        table.add_column("Age", justify="right")
 
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
         h1 = _momentum_text(p.price_change_h1)
         h24 = _momentum_text(p.price_change_h24)
-
-        # Buy percentage as simple number
-        total_txns = p.buys_h1 + p.sells_h1
-        if total_txns > 0:
-            buy_pct = p.buys_h1 / total_txns * 100
-            buy_color = C_GREEN if buy_pct >= 55 else C_RED if buy_pct < 45 else C_TEXT
-            buy_text = Text(f"{buy_pct:.0f}%", style=buy_color)
-        else:
-            buy_text = Text("-", style=C_DIM)
 
         # Score as plain colored number
         sc = candidate.score
@@ -660,17 +649,6 @@ def render_hot_table(
             score_text = Text(f"{sc:.0f}", style=C_TEXT)
         else:
             score_text = Text(f"{sc:.0f}", style=C_DIM)
-
-        # Age as simple text
-        age_h = p.age_hours
-        if age_h is None:
-            age_text = Text("-", style=C_DIM)
-        elif age_h < 1:
-            age_text = Text(f"{age_h * 60:.0f}m", style=f"bold {C_CYAN}")
-        elif age_h < 24:
-            age_text = Text(f"{age_h:.1f}h", style=C_TEXT)
-        else:
-            age_text = Text(f"{age_h / 24:.1f}d", style=C_DIM)
 
         if compact:
             table.add_row(
@@ -698,8 +676,6 @@ def render_hot_table(
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
                 fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
-                buy_text,
-                age_text,
             )
 
     if not candidates:
@@ -1082,6 +1058,41 @@ def render_rank_movers_table(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
+def _trust_badge(pair: PairSnapshot) -> Text:
+    """Heuristic trust indicator based on holders, liquidity, and volume."""
+    holders = pair.holders_count
+    liq = pair.liquidity_usd
+    vol = pair.volume_h24
+    txns = pair.txns_h24
+
+    # Strong signals of legitimacy
+    if holders is not None and holders >= 10_000 and liq >= 100_000:
+        return Text(_safe_text(f"{DOT} legit"), style=f"bold {C_GREEN}")
+    if holders is not None and holders >= 1_000 and liq >= 50_000 and txns >= 100:
+        return Text(_safe_text(f"{DOT} likely"), style=C_GREEN)
+
+    # Warning signals
+    warnings: list[str] = []
+    if liq < 5_000:
+        warnings.append("low-liq")
+    if holders is not None and holders < 50:
+        warnings.append("few-hold")
+    if vol < 100 and txns < 5:
+        warnings.append("no-activity")
+    if liq > 0 and vol > liq * 20:
+        warnings.append("wash")
+
+    if len(warnings) >= 2:
+        return Text(_safe_text(f"{DOT} ") + ",".join(warnings[:2]), style=f"bold {C_RED}")
+    if warnings:
+        return Text(_safe_text(f"{DOT} ") + warnings[0], style=C_GOLD)
+
+    # Neutral
+    if holders is None and liq < 50_000:
+        return Text(_safe_text(f"{DOT} unverified"), style=C_DIM)
+    return Text(_safe_text(f"{DOT} ok"), style=C_TEXT)
+
+
 def render_search_table(pairs: list[PairSnapshot]) -> Table:
     compact = _compact_level() >= 1
     table = Table(
@@ -1101,8 +1112,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
     table.add_column("Holders", justify="right")
     table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h", justify="right", min_width=10)
-    if not compact:
-        table.add_column("Pair", style=C_DIM)
+    table.add_column("Trust", min_width=10)
 
     for pair in pairs:
         if pair.price_usd >= 0.01:
@@ -1113,13 +1123,13 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
             _chain_text(pair.chain_id),
             Text(_safe_text(pair.base_symbol), style=f"bold {C_GOLD}"),
             price,
-            _vol_heat(pair.volume_h24),
+            fmt_usd(pair.volume_h24),
             str(pair.txns_h1),
             fmt_usd(pair.liquidity_usd),
             holders_text(pair.holders_count),
             _momentum_text(pair.price_change_h1),
             _momentum_text(pair.price_change_h24),
-            *((_safe_text(pair.pair_address),) if not compact else ()),
+            _trust_badge(pair),
         )
     if not pairs:
         cols = len(table.columns)
