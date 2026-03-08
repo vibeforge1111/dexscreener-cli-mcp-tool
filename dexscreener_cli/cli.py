@@ -40,6 +40,7 @@ from .ui import (
     C_GREEN,
     C_LABEL,
     C_RED,
+    C_ROW_ALT,
     C_TEXT,
     C_WHITE,
     CHAIN_LABEL,
@@ -709,7 +710,7 @@ def _render_ai_board(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -813,7 +814,7 @@ def _render_new_launches_board(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -2153,7 +2154,7 @@ def profiles(
         header_style=f"bold {C_TEXT}",
         border_style=C_BORDER,
         title_style="",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
     )
     table.add_column("Profile")
     table.add_column("Chains")
@@ -2223,7 +2224,7 @@ def rate_stats(
         header_style=f"bold {C_TEXT}",
         border_style=C_BORDER,
         title_style="",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
     )
     table.add_column("Metric")
     table.add_column("Value", justify="right")
@@ -2285,7 +2286,7 @@ def preset_list() -> None:
         header_style=f"bold {C_TEXT}",
         border_style=C_BORDER,
         title_style="",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
     )
     table.add_column("Name", style="bold cyan")
     table.add_column("Chains")
@@ -2423,7 +2424,7 @@ def task_list(
         header_style=f"bold {C_TEXT}",
         border_style=C_BORDER,
         title_style="",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
     )
     table.add_column("ID", style="bold cyan")
     table.add_column("Name")
@@ -2758,7 +2759,7 @@ def task_runs(
         header_style=f"bold {C_TEXT}",
         border_style=C_BORDER,
         title_style="",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
     )
     table.add_column("Finished", style="dim")
     table.add_column("Task")

@@ -36,6 +36,7 @@ C_BLUE = "#60a5fa"             # muted blue accent (links, chain)
 C_CYAN = "#67e8f9"             # light cyan (freshness)
 C_PURPLE = "#a78bfa"           # muted purple (signals)
 C_WHITE = "#f9fafb"            # near-white for emphasis
+C_ROW_ALT = "#1e1e1e"          # neutral dark grey for alternating rows
 
 CHAIN_STYLES = {
     "solana": C_GREEN,
@@ -740,7 +741,7 @@ def render_hot_table(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -899,7 +900,7 @@ def render_new_runners_table(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -1126,7 +1127,7 @@ def render_rank_movers_table(
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Rank Movers[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -1246,7 +1247,7 @@ def render_search_table(pairs: list[PairSnapshot]) -> Table:
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Search Results[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
     )
@@ -1322,7 +1323,7 @@ def render_inspect_view(
         title=title,
         box=box.SIMPLE_HEAVY,
         header_style=f"bold {C_TEXT}",
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         title_style="",
         show_header=True,
@@ -1454,7 +1455,7 @@ def render_chain_heat_table(candidates: list[HotTokenCandidate]) -> Table:
         title=f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Chain Heat[/bold {C_TEXT}]",
         box=box.SIMPLE_HEAVY,
         expand=True,
-        row_styles=["", "on #1e2029"],
+        row_styles=["", f"on {C_ROW_ALT}"],
         border_style=C_BORDER,
         header_style=f"bold {C_TEXT}",
         title_style="",
