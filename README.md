@@ -6,7 +6,7 @@
 
 A visual terminal scanner, MCP server, and AI skill for Dexscreener token signals. **Unofficial** - not affiliated with or endorsed by Dexscreener.
 
-Scans hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Scores them by volume, liquidity, momentum, and flow pressure. Use it from the terminal, connect it to AI agents via MCP, or load it as a skill in Claude/Codex/OpenClaw.
+Scans hot tokens across every chain Dexscreener supports. Scores them by volume, liquidity, momentum, and flow pressure. Use it from the terminal, connect it to AI agents via MCP, or load it as a skill in Claude/Codex/OpenClaw.
 
 **Free APIs used:**
 - [Dexscreener API](https://docs.dexscreener.com/) - token data, pairs, profiles, boosts
@@ -19,11 +19,27 @@ Scans hot tokens across Solana, Base, Ethereum, BSC, and Arbitrum. Scores them b
 
 ## Quick Install
 
-You need **Python 3.11+** and **Git** installed. Then follow these 3 steps:
+You need **Python 3.11+** and **Git** installed. Then follow these 3 steps.
+
+If you are on Windows and do not usually use terminals, use **Command Prompt** first. It is the simplest path for this project.
+
+### Windows: how to open Command Prompt
+
+1. Press the `Windows` key
+2. Type `Command Prompt`
+3. Click the app named `Command Prompt`
+
+You should see a window with a prompt like:
+
+```text
+C:\Users\YOUR_NAME>
+```
+
+All Windows examples below work in that window.
 
 ### Step 1: Clone the repo
 
-Open a terminal (Command Prompt, PowerShell, or Terminal) and paste this:
+Open a terminal and paste this:
 
 ```bash
 git clone https://github.com/vibeforge1111/dexscreener-cli-mcp-tool.git
@@ -43,6 +59,43 @@ chmod +x install.sh && ./install.sh
 ```
 
 This creates a virtual environment and installs everything. Takes about 30 seconds.
+
+### Step 3: First run
+
+If you are on Windows Command Prompt, paste these exactly:
+
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+.\.venv\Scripts\ds.exe doctor
+.\.venv\Scripts\ds.exe setup
+.\.venv\Scripts\ds.exe hot --chains=solana,base --limit=10
+```
+
+If you are on Mac / Linux or you activated the environment already, the same flow is:
+
+```bash
+ds doctor
+ds setup
+ds hot --chains=solana,base --limit=10
+```
+
+`ds setup` is important on a fresh install. It creates your local default preset so scans feel sensible immediately.
+
+### Common Windows mistake
+
+If you see:
+
+```text
+Option '--profile' requires an argument.
+```
+
+you pressed `Enter` too early. Run the whole command on **one line**, for example:
+
+```cmd
+.\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --interval=2
+```
+
+Using `=` is the safest way to paste commands in Windows because the option and value stay attached.
 
 <details>
 <summary>Manual install (if the script doesn't work)</summary>
@@ -69,14 +122,24 @@ pip install -e .
 ```
 </details>
 
-### Step 3: Run your first scan
+That's it. The setup wizard saves your choices and auto-loads them on every scan.
 
-```bash
-ds setup       # 5-question wizard - picks your chains, style, and filters
-ds hot         # Scan hot tokens with your settings
+## Windows Quick Start
+
+If you just want a copy-paste path that works in `cmd.exe`, use this:
+
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+.\.venv\Scripts\ds.exe doctor
+.\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
 ```
 
-That's it. The setup wizard saves your choices and auto-loads them on every scan.
+If you want a shorter non-live test first:
+
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+.\.venv\Scripts\ds.exe hot --chains=solana,base --limit=10
+```
 
 ---
 
@@ -98,6 +161,8 @@ That's it. The setup wizard saves your choices and auto-loads them on every scan
 
 Three live modes that auto-refresh and keep your terminal updated. Press `Ctrl+C` to stop any of them.
 
+Important: this project uses **live polling** of public APIs, not websocket streaming. The CLI now uses a rate-aware default Dex cache of **10 seconds**, which is tuned to Dexscreener's documented free limits. That means the screen can repaint faster than new upstream data arrives.
+
 **`ds watch`** - Live hot runner board
 
 The simplest live mode. Shows the same hot runner table as `ds hot`, but refreshes automatically.
@@ -117,6 +182,14 @@ ds new-runners-watch --chain solana              # Watch Solana runners
 ds new-runners-watch --chain base --interval 6   # Watch Base, 6s refresh
 ds new-runners-watch --chain solana --watch-chains solana,base,ethereum  # Enable chain switching
 ```
+
+Recommended right now:
+
+```bash
+ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+```
+
+This is the most useful live board in the current build. It is more informative than `ds watch` and usually surfaces more names than `alpha-drops-watch`.
 
 Keyboard shortcuts while running:
 - `1-9` - Switch between chains (if `--watch-chains` is set)
@@ -139,6 +212,8 @@ ds alpha-drops-watch --chains solana --alert-min-score 75 --alert-cooldown-secon
 - Use `--limit` to control how many tokens show (fewer = faster scans)
 - Use `--profile discovery` to cast a wider net and see more tokens
 - Use `--no-screen` (on new-runners-watch and alpha-drops-watch) to avoid fullscreen mode
+- If Solana is quiet, switch to Base with `1` / `2` hotkeys or start on Base directly
+- If a live board shows nothing, widen it with `--max-age-hours=48 --include-unknown-age --profile=discovery`
 
 ### Custom Scan Profiles
 
@@ -219,10 +294,10 @@ ds hot --chains solana,base --limit 15
 ### "I want a live feed that updates automatically"
 
 ```bash
-ds watch --chains solana,base --interval 5
+ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
 ```
 
-This refreshes every 5 seconds. Press `Ctrl+C` to stop.
+This is the best live mode for most users. It refreshes the board continuously and gives chain switching, rank movers, spotlight cards, and change cues.
 
 ### "Show me brand new tokens that just launched"
 
@@ -234,7 +309,7 @@ ds top-new --chain base
 ### "I want a live feed of new launches only"
 
 ```bash
-ds new-runners-watch --chain solana --interval 6
+ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
 ```
 
 ### "Find me alpha - new drops with breakout potential"
@@ -312,6 +387,13 @@ Start the MCP server and connect it to Claude, Codex, or any MCP-compatible agen
 dexscreener-mcp
 ```
 
+On Windows, if you have **not** activated the virtual environment, run the full path instead:
+
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+.\.venv\Scripts\dexscreener-mcp.exe
+```
+
 Then ask in natural language: "What's hot on Solana?" or "Find new tokens on Base with high volume."
 
 ---
@@ -349,6 +431,18 @@ The agent calls the right MCP tool with the right parameters. You get the same d
 ```
 
 On Mac/Linux use `.venv/bin/dexscreener-mcp` instead of `.venv/Scripts/dexscreener-mcp`.
+
+If you want an exact Windows example, replace the command path with your real local path:
+
+```json
+{
+  "mcpServers": {
+    "dexscreener": {
+      "command": "C:\\path\\to\\dexscreener-cli-mcp-tool\\.venv\\Scripts\\dexscreener-mcp.exe"
+    }
+  }
+}
+```
 
 **Claude Code** - add to your `.mcp.json` or project settings:
 
@@ -427,6 +521,12 @@ For AI coding agents that use skill files (Claude Code, Codex, OpenClaw), load `
 ```bash
 # Point your agent at the skill file:
 SKILL.md
+```
+
+On Windows, the actual path is:
+
+```text
+C:\path\to\dexscreener-cli-mcp-tool\SKILL.md
 ```
 
 See `SKILL.md` for the full specification.
@@ -588,6 +688,8 @@ Each token gets a 0-100 score based on 8 weighted components:
 | No tokens found | Lower filters: `--min-liquidity-usd 10000 --min-txns-h1 5` |
 | Only Solana results | Expected when Solana dominates Dexscreener boosts. Try `--chains base` |
 | Unicode garbled | Run `chcp 65001` (Windows) or use a modern terminal |
+| `Option '--profile' requires an argument` | You pressed Enter too early. Run `--profile=discovery` on the same line |
+| `ds` is not recognized | Use `.\.venv\Scripts\ds.exe` on Windows if you did not activate the environment |
 | Import errors | Run `ds doctor` then `ds update` |
 | API timeouts | Check internet, run `ds doctor` to verify API connectivity |
 

@@ -1,6 +1,6 @@
 # Dexscreener Unofficial CLI + MCP + Skills
 
-You are a token scanning specialist using the Dexscreener Unofficial CLI (not affiliated with or endorsed by Dexscreener). All APIs used are free and public - no API keys required. You help users discover, analyze, and monitor tokens across Solana, Base, Ethereum, BSC, and Arbitrum using the CLI and MCP tools.
+You are a token scanning specialist using the Dexscreener Unofficial CLI (not affiliated with or endorsed by Dexscreener). All APIs used are free and public - no API keys required. You help users discover, analyze, and monitor tokens across every chain Dexscreener supports using the CLI and MCP tools.
 
 ## Identity
 
@@ -77,6 +77,13 @@ Use this skill when the user mentions any of:
 
 ## CLI Commands (for terminal users)
 
+Important CLI notes:
+- On Windows, non-technical users should default to `Command Prompt` first
+- If the virtual environment is not activated, Windows users should run `.\.venv\Scripts\ds.exe` or `.\.venv\Scripts\dexscreener-mcp.exe`
+- For copy-paste safety on Windows, prefer `--flag=value` style such as `--profile=discovery`
+- Live modes use live public API polling, not websocket streaming
+- The current default Dex cache TTL is `10s`, tuned to Dexscreener's documented free limits; users can override it with `DS_CACHE_TTL_SECONDS`
+
 ### One-Shot Scans
 ```bash
 ds hot                                  # Scan hot tokens across all chains
@@ -97,6 +104,16 @@ ds hot --json                           # JSON output for scripts
 ds watch --chains solana --interval 5               # Live hot runner board
 ds new-runners-watch --chain solana --interval 6     # Live new runner tracker
 ds alpha-drops-watch --chains solana,base             # Live alpha drops with alerts
+```
+
+Preferred live command in the current build:
+```bash
+ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+```
+
+Fallback live command if Solana is quiet:
+```bash
+ds new-runners-watch --chain=base --watch-chains=base,solana --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
 ```
 
 Live mode keyboard shortcuts (new-runners-watch / alpha-drops-watch):
@@ -169,8 +186,8 @@ When the user says... use this approach:
 | "Backup my config" | `export_state_bundle()` |
 | "Check API health" | `get_rate_budget_stats()` |
 | "What chains can I scan?" | Answer: solana, base, ethereum, bsc, arbitrum |
-| "Watch live" / "real-time feed" | CLI: `ds watch --chains solana --interval 5` |
-| "Live new launches" | CLI: `ds new-runners-watch --chain solana` |
+| "Watch live" / "real-time feed" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
+| "Live new launches" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
 | "Alpha drops with Discord alerts" | CLI: `ds alpha-drops-watch --chains solana --discord-webhook-url ...` |
 | "Check my setup" | CLI: `ds doctor` |
 
@@ -276,14 +293,17 @@ When creating tasks with alerts, these parameters are available:
 
 ### When user wants live monitoring:
 1. For MCP agents: set up a task with `create_task` and configure alerts
-2. For CLI users: suggest `ds watch`, `ds new-runners-watch`, or `ds alpha-drops-watch`
-3. Live modes are CLI-only - MCP agents use tasks/alerts for ongoing monitoring
+2. For CLI users: prefer `ds new-runners-watch` first, `ds hot` second, and `ds watch` only if they want the simplest hot board
+3. If a live board is sparse, widen it with `--profile=discovery --max-age-hours=48 --include-unknown-age`
+4. Live modes are CLI-only - MCP agents use tasks/alerts for ongoing monitoring
 
 ## Error Handling
 
 | Error | Response |
 |-------|----------|
 | No tokens found | Suggest lowering filters: use discovery profile values (min_liquidity_usd=8000, min_txns_h1=5) |
+| CLI says `Option '--profile' requires an argument` | User pressed Enter too early. Tell them to run `--profile=discovery` on the same line |
+| Windows user says `ds` is not recognized | Tell them to run `.\.venv\Scripts\ds.exe` from the repo root or activate the virtual environment |
 | Token not found in search | Try alternate name/symbol, or ask for the contract address |
 | API rate limited | Wait a moment and retry, or check `get_rate_budget_stats` |
 | Missing chain support | List supported chains: solana, base, ethereum, bsc, arbitrum |
@@ -365,12 +385,32 @@ pip install -e .    # or run install.bat / install.sh
 ds setup            # First-run calibration
 ```
 
+Windows Command Prompt first-run path:
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+install.bat
+.\.venv\Scripts\ds.exe doctor
+.\.venv\Scripts\ds.exe setup
+.\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+```
+
 For MCP server, add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "dexscreener": {
       "command": "/path/to/.venv/bin/dexscreener-mcp"
+    }
+  }
+}
+```
+
+Windows MCP example:
+```json
+{
+  "mcpServers": {
+    "dexscreener": {
+      "command": "C:\\path\\to\\dexscreener-cli-mcp-tool\\.venv\\Scripts\\dexscreener-mcp.exe"
     }
   }
 }
