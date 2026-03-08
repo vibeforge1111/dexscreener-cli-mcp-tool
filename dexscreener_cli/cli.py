@@ -101,11 +101,10 @@ def _app_callback(ctx: typer.Context) -> None:
         raise typer.Exit()
     if ctx.invoked_subcommand in _FIRST_RUN_SKIP_COMMANDS:
         return
-    state_dir = Path.home() / ".dexscreener-cli"
-    presets_file = state_dir / "presets.json"
-    if not presets_file.exists():
+    store = StateStore()
+    if store.get_preset("default") is None:
         console.print(
-            "[bold #fbbf24]Tip:[/bold #fbbf24] First time? Run [bold]ds setup[/bold] "
+            "[bold #fbbf24]Tip:[/bold #fbbf24] Run [bold]ds setup[/bold] "
             "to pick your chains and preferences (takes 30 seconds).\n"
         )
 NEW_RUNNER_SORT_MODES: tuple[str, ...] = ("score", "readiness", "rs", "volume", "momentum")
