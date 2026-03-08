@@ -81,6 +81,44 @@ def _quickstart_commands(platform: str, goal: str) -> list[str]:
     return [_quickstart_cd(selected_platform), f"{prefix} doctor", live]
 
 
+def _quickstart_terminal(platform: str) -> str:
+    selected_platform = _quickstart_platform(platform)
+    if selected_platform == "windows-cmd":
+        return "Command Prompt"
+    if selected_platform == "windows-powershell":
+        return "PowerShell"
+    return "Terminal"
+
+
+def _quickstart_expectation(goal: str) -> str:
+    selected_goal = _quickstart_goal(goal)
+    if selected_goal == "mcp":
+        return "The MCP server binary will start and wait for an MCP-compatible agent connection over stdio."
+    if selected_goal == "hot":
+        return "You should see a populated one-shot hot-token scan across Solana and Base."
+    if selected_goal == "all":
+        return "You should complete setup, see a one-shot hot scan, then enter the live new-runners board."
+    return "You should enter the live new-runners board with Solana active and Base available via hotkey switching."
+
+
+def _quickstart_common_mistakes(platform: str) -> list[str]:
+    selected_platform = _quickstart_platform(platform)
+    if selected_platform == "windows-cmd":
+        return [
+            "Do not press Enter in the middle of a command after an option like --profile.",
+            "Prefer --flag=value style on Windows for copy-paste safety.",
+            "If ds is not recognized, run .\\.venv\\Scripts\\ds.exe from the repo root.",
+        ]
+    if selected_platform == "windows-powershell":
+        return [
+            "If ds is not recognized, run .\\.venv\\Scripts\\ds.exe from the repo root.",
+            "Use backtick (`) for PowerShell line continuation only if you really need multi-line commands.",
+        ]
+    return [
+        "If ds is not recognized, activate the virtual environment or run the binary from .venv/bin.",
+    ]
+
+
 def _serialize_candidate(candidate: HotTokenCandidate) -> dict[str, Any]:
     pair = candidate.pair
     analytics = candidate.analytics
@@ -768,10 +806,13 @@ async def get_cli_quickstart(
     return {
         "platform": selected_platform,
         "goal": selected_goal,
+        "terminalToOpen": _quickstart_terminal(selected_platform),
         "repoRoot": str(_repo_root()),
         "cliPath": cli_path,
         "mcpPath": mcp_path,
         "commands": _quickstart_commands(selected_platform, selected_goal),
+        "whatToExpect": _quickstart_expectation(selected_goal),
+        "commonMistakes": _quickstart_common_mistakes(selected_platform),
         "notes": [
             "Prefer --flag=value style on Windows for copy-paste safety.",
             "Live boards are CLI-only and use live API polling, not websocket streaming.",
@@ -795,6 +836,29 @@ async def resource_presets() -> dict[str, Any]:
 async def resource_tasks() -> dict[str, Any]:
     store = StateStore()
     return {"count": len(store.list_tasks()), "items": [t.to_dict() for t in store.list_tasks()]}
+
+
+@mcp.resource("dexscreener://cli-guide", name="cli-guide", description="CLI-first onboarding and troubleshooting guide.")
+async def resource_cli_guide() -> dict[str, Any]:
+    return {
+        "recommendedLiveCommand": (
+            r".\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base "
+            r"--profile=discovery --max-age-hours=48 --include-unknown-age --interval=2"
+        ),
+        "recommendedHotCommand": r".\.venv\Scripts\ds.exe hot --chains=solana,base --limit=10",
+        "recommendedQuickstartCommand": r".\.venv\Scripts\ds.exe quickstart --shell cmd --goal live",
+        "windowsFirstTerminal": "Command Prompt",
+        "liveModeNotes": [
+            "Live boards are CLI-only and use timed polling, not websocket streaming.",
+            "The default Dex cache TTL is 10 seconds and can be overridden with DS_CACHE_TTL_SECONDS.",
+            "If a live board is sparse, widen it with --profile=discovery --max-age-hours=48 --include-unknown-age.",
+        ],
+        "commonMistakes": [
+            "Pressing Enter too early after --profile or another option that needs a value.",
+            "Using ds before activating the environment or before using the .venv path.",
+            "Using PowerShell backticks in Command Prompt.",
+        ],
+    }
 
 
 @mcp.prompt("alpha_scan_plan")

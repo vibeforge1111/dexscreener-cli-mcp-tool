@@ -68,6 +68,7 @@ Use this skill when the user mentions any of:
 | `dexscreener://profiles` | Built-in scan profile thresholds (strict/balanced/discovery) |
 | `dexscreener://presets` | All saved user presets |
 | `dexscreener://tasks` | All saved scan tasks |
+| `dexscreener://cli-guide` | CLI-first onboarding, recommended live commands, and common user mistakes |
 
 ### MCP Prompts (agent workflows)
 
@@ -305,8 +306,9 @@ When creating tasks with alerts, these parameters are available:
 ### When user needs setup help:
 1. If they want exact commands, use `get_cli_quickstart`
 2. If they want a natural-language walkthrough, use `cli_quickstart_guide`
-3. For CLI users already in the terminal, suggest `ds quickstart --shell cmd --goal live` on Windows or `ds quickstart --shell bash --goal live` on Mac/Linux
-4. Prefer `--flag=value` examples on Windows
+3. Load `dexscreener://cli-guide` when you want the current recommended live command and common setup pitfalls
+4. For CLI users already in the terminal, suggest `ds quickstart --shell cmd --goal live` on Windows or `ds quickstart --shell bash --goal live` on Mac/Linux
+5. Prefer `--flag=value` examples on Windows
 
 ## Error Handling
 

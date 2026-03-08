@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import sys
 from collections import deque
 from datetime import UTC, datetime
@@ -689,23 +688,33 @@ def _render_ai_board(
     min_volume_h24_usd: float,
     min_txns_h1: int,
 ) -> None:
-    compact = _terminal_width() < 140
-    chain_lbl = chain.upper()[:4]
-    table = Table(
-        title=(
-            f"[bold #e5e7eb]Top AI Tokens[/bold #e5e7eb]  "
-            f"[#6b7280]{chain_lbl}  liq>={fmt_usd(min_liquidity_usd)}  "
+    compact = _compact_level() >= 1
+    chain_lbl = CHAIN_LABEL.get(chain, chain.upper()[:4])
+
+    if compact:
+        title = (
+            f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Top AI Tokens[/bold {C_TEXT}] "
+            f"[{C_LABEL}]{chain_lbl}[/{C_LABEL}]"
+        )
+    else:
+        title = (
+            f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Top AI Tokens[/bold {C_TEXT}]  "
+            f"[{C_LABEL}]{chain_lbl}[/{C_LABEL}]  "
+            f"[{C_DIM}]liq>={fmt_usd(min_liquidity_usd)}  "
             f"vol24>={fmt_usd(min_volume_h24_usd)}  "
-            f"tx1h>={min_txns_h1}[/#6b7280]"
-        ),
+            f"tx1h>={min_txns_h1}[/{C_DIM}]"
+        )
+
+    table = Table(
+        title=title,
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
+        header_style=f"bold {C_TEXT}",
         row_styles=["", "on #1e2029"],
-        border_style="#3a3d4a",
+        border_style=C_BORDER,
         title_style="",
     )
-    table.add_column("#", justify="right", width=3)
-    table.add_column("Token", style="bold #fbbf24", min_width=8)
+    table.add_column("#", justify="right", style=f"bold {C_TEXT}", width=3)
+    table.add_column("Token", style=f"bold {C_GOLD}", min_width=8)
     table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h Vol", justify="right")
     table.add_column("Txns", justify="right")
@@ -714,7 +723,7 @@ def _render_ai_board(
     if not compact:
         table.add_column("Price", justify="right")
         table.add_column("24h", justify="right", min_width=10)
-        table.add_column("Dex", style="#4b5563")
+        table.add_column("Dex", style=C_DIM)
 
     for i, row in enumerate(rows, start=1):
         symbol = str(row.get("symbol", "?"))
@@ -727,20 +736,20 @@ def _render_ai_board(
         holders_count = _as_int(row.get("holdersCount"), -1)
         dex = str(row.get("dexId", ""))
         table.add_row(
-            str(i),
-            symbol,
+            _rank_badge(i),
+            Text(_safe_text(symbol), style=f"bold {C_GOLD}"),
             _pct_or_na(h1, txns_h1=tx1h),
-            fmt_usd(vol24),
+            _vol_heat(vol24),
             str(tx1h),
             fmt_usd(liq),
             holders_text(holders_count if holders_count >= 0 else None),
-            *((f"${price:,.8f}" if price < 0.01 else f"${price:,.6f}", _pct_text(h24), dex) if not compact else ()),
+            *((fmt_price(price), _momentum_text(h24), dex) if not compact else ()),
         )
     if not rows:
-        if compact:
-            table.add_row("-", "No AI tokens matched filters", "-", "-", "-", "-", "-")
-        else:
-            table.add_row("-", "No AI tokens matched filters", "-", "-", "-", "-", "-", "-", "-", "-")
+        cols = len(table.columns)
+        fallback = ["-"] * cols
+        fallback[1] = "No AI tokens matched filters"
+        table.add_row(*fallback)
 
     total_vol = sum(_as_float(r.get("volumeH24")) for r in rows)
     total_liq = sum(_as_float(r.get("liquidityUsd")) for r in rows)
@@ -753,16 +762,18 @@ def _render_ai_board(
         else 0.0
     )
     summary_txt = Text()
-    summary_txt.append(f"Tokens: {len(rows)}", style="#d1d5db")
-    summary_txt.append(f"    24h Vol: {fmt_usd(total_vol)}", style="#d1d5db")
-    summary_txt.append(f"    Liq: {fmt_usd(total_liq)}", style="#d1d5db")
-    summary_txt.append(f"    Avg Holders: {holder_hint}", style="#d1d5db")
-    h1_style = "#4ade80" if avg_h1 > 0 else "#f87171" if avg_h1 < 0 else "#4b5563"
-    summary_txt.append(f"    Avg 1h: {fmt_pct(avg_h1)}", style=h1_style)
+    summary_txt.append(f"Tokens: {len(rows)}", style=C_TEXT)
+    summary_txt.append("    24h Vol: ", style=C_LABEL)
+    summary_txt.append_text(_vol_heat(total_vol))
+    summary_txt.append("    Liq: ", style=C_LABEL)
+    summary_txt.append(fmt_usd(total_liq), style=f"bold {C_GREEN}")
+    summary_txt.append(f"    Avg Holders: {holder_hint}", style=C_TEXT)
+    summary_txt.append("    Avg 1h: ", style=C_LABEL)
+    summary_txt.append_text(_momentum_text(avg_h1))
     summary = Panel(
         summary_txt,
-        title="[bold #e5e7eb]AI Market Snapshot[/bold #e5e7eb]",
-        border_style="#3a3d4a",
+        title=f"[bold {C_TEXT}]AI Market Snapshot[/bold {C_TEXT}]",
+        border_style=C_BORDER,
         box=box.HEAVY,
         padding=(0, 1),
     )
@@ -781,24 +792,33 @@ def _render_new_launches_board(
     min_txns_h1: int,
     min_txns_h24: int,
 ) -> None:
-    compact = _terminal_width() < 145
-    chain_lbl = chain.upper()[:4]
-    title = (
-        f"[bold #e5e7eb]Top New Coins[/bold #e5e7eb]  "
-        f"[#6b7280]{chain_lbl}  window={days}d  "
-        f"liq>={fmt_usd(min_liquidity_usd)}  vol>={fmt_usd(min_volume_h24_usd)}  "
-        f"tx1h>={min_txns_h1}  tx24h>={min_txns_h24}[/#6b7280]"
-    )
+    compact = _compact_level() >= 1
+    chain_lbl = CHAIN_LABEL.get(chain, chain.upper()[:4])
+
+    if compact:
+        title = (
+            f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Top New Coins[/bold {C_TEXT}] "
+            f"[{C_LABEL}]{chain_lbl}[/{C_LABEL}]"
+        )
+    else:
+        title = (
+            f"[bold {C_TEXT}]{_safe_text(DIAMOND)} Top New Coins[/bold {C_TEXT}]  "
+            f"[{C_LABEL}]{chain_lbl}[/{C_LABEL}]  "
+            f"[{C_DIM}]window={days}d  liq>={fmt_usd(min_liquidity_usd)}  "
+            f"vol>={fmt_usd(min_volume_h24_usd)}  "
+            f"tx1h>={min_txns_h1}  tx24h>={min_txns_h24}[/{C_DIM}]"
+        )
+
     table = Table(
         title=title,
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
+        header_style=f"bold {C_TEXT}",
         row_styles=["", "on #1e2029"],
-        border_style="#3a3d4a",
+        border_style=C_BORDER,
         title_style="",
     )
-    table.add_column("#", justify="right", width=3)
-    table.add_column("Token", style="bold #fbbf24", min_width=8)
+    table.add_column("#", justify="right", style=f"bold {C_TEXT}", width=3)
+    table.add_column("Token", style=f"bold {C_GOLD}", min_width=8)
     table.add_column("Age", justify="right")
     table.add_column("1h", justify="right", min_width=10)
     table.add_column("24h", justify="right", min_width=10)
@@ -812,14 +832,6 @@ def _render_new_launches_board(
     for idx, row in enumerate(rows, start=1):
         symbol = str(row.get("symbol", "?"))
         age_hours = _as_float(row.get("ageHours"), 0.0)
-        if age_hours < 1:
-            age_txt = Text(f"{age_hours * 60:.0f}m", style="bold #67e8f9")
-        elif age_hours < 24:
-            age_txt = Text(f"{age_hours:.1f}h", style="#67e8f9")
-        elif age_hours < 72:
-            age_txt = Text(f"{age_hours:.1f}h", style="#d1d5db")
-        else:
-            age_txt = Text(f"{age_hours / 24:.1f}d", style="#4b5563")
         vol24 = _as_float(row.get("volumeH24"))
         tx1h = _as_int(row.get("txnsH1"))
         liq = _as_float(row.get("liquidityUsd"))
@@ -827,12 +839,12 @@ def _render_new_launches_board(
         mcap = _as_float(row.get("marketCap")) or _as_float(row.get("fdv"))
 
         base_row: list[object] = [
-            str(idx),
-            symbol,
-            age_txt,
+            _rank_badge(idx),
+            Text(_safe_text(symbol), style=f"bold {C_GOLD}"),
+            _age_badge(age_hours),
             _pct_or_na(_as_float(row.get("priceChangeH1")), txns_h1=tx1h),
-            _pct_text(_as_float(row.get("priceChangeH24"))),
-            fmt_usd(vol24),
+            _momentum_text(_as_float(row.get("priceChangeH24"))),
+            _vol_heat(vol24),
             str(tx1h),
             fmt_usd(liq),
             holders_text(holders_count if holders_count >= 0 else None),
@@ -1058,7 +1070,7 @@ def _render_quickstart(shell: str, goal: str) -> None:
             f"Shell: {title_shell}\n"
             f"Goal: {title_goal}\n"
             "Paste the commands below exactly.",
-            border_style="#3a3d4a",
+            border_style=C_BORDER,
             box=box.HEAVY,
             padding=(1, 2),
         )
@@ -1084,7 +1096,7 @@ def setup() -> None:
             "[bold]Welcome to the Dexscreener CLI setup wizard.[/bold]\n"
             "Answer 5 quick questions to calibrate your scanner.\n"
             "Your settings are saved and auto-loaded on every scan.",
-            border_style="#3a3d4a",
+            border_style=C_BORDER,
             box=box.HEAVY,
             padding=(1, 2),
         )
@@ -1334,15 +1346,15 @@ def doctor() -> None:
     table = Table(
         title="[bold #e5e7eb]Diagnostics[/bold #e5e7eb]",
         box=box.HEAVY,
-        border_style="#3a3d4a",
-        header_style="bold #e5e7eb",
+        border_style=C_BORDER,
+        header_style=f"bold {C_TEXT}",
     )
     table.add_column("Check", style="bold")
     table.add_column("Status", justify="center")
     table.add_column("Detail")
 
     for label, ok, detail in checks:
-        status = Text("PASS", style="bold #4ade80") if ok else Text("WARN", style="bold #fbbf24")
+        status = Text("PASS", style=f"bold {C_GREEN}") if ok else Text("WARN", style=f"bold {C_GOLD}")
         table.add_row(label, status, detail)
 
     console.print(table)
@@ -1663,14 +1675,13 @@ def alpha_drops_watch(
                         previous_ranks=previous_ranks,
                         limit=limit,
                     ),
-                    Panel(
-                        (
-                            f"refresh={interval:.1f}s | cycle={cycle} | chains={','.join(scan_chains)} | sort={selected_sort}\n"
-                            f"{status_message}\n"
-                            "Ctrl+C to exit"
-                        ),
-                        border_style="#2a2d3a",
-                        box=box.HEAVY,
+                    render_status_footer(
+                        interval=interval,
+                        chains=scan_chains,
+                        profile=selected_sort,
+                        cycle=cycle,
+                        new_count=new_count,
+                        changed_count=changed_count,
                     ),
                 )
                 live.update(view)
@@ -1910,15 +1921,12 @@ def new_runners_watch(
                             previous_ranks=previous_ranks,
                             limit=limit,
                         ),
-                        Panel(
-                            (
-                                f"refresh={interval:.1f}s | cycle={cycle} | chain={active_chain} "
-                                f"| sort={active_sort_mode} | selected={controller.selected_index + 1 if ranked else '-'}\n"
-                                f"{status_message}\n"
-                                f"hotkeys: 1-9 chain switch ({','.join(chain_pool)}) | s sort | j/k select | c copy | Ctrl+C exit"
-                            ),
-                            border_style="dim",
-                            box=box.ROUNDED,
+                        render_status_footer(
+                            interval=interval,
+                            chains=(active_chain,),
+                            cycle=cycle,
+                            new_count=new_count,
+                            changed_count=changed_count,
                         ),
                     )
                     live.update(view)
@@ -2142,8 +2150,8 @@ def profiles(
     table = Table(
         title="[bold #e5e7eb]Chain-Aware Profiles[/bold #e5e7eb]",
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
-        border_style="#3a3d4a",
+        header_style=f"bold {C_TEXT}",
+        border_style=C_BORDER,
         title_style="",
         row_styles=["", "on #1e2029"],
     )
@@ -2173,7 +2181,7 @@ def profiles(
             "Explicit CLI thresholds always override profile-derived values.\n"
             "Use profile=discovery for wider net, strict for higher-quality runners."
         ),
-        border_style="#2a2d3a",
+        border_style=C_BORDER_DIM,
         box=box.HEAVY,
     )
     console.print(build_header())
@@ -2212,8 +2220,8 @@ def rate_stats(
     table = Table(
         title="[bold #e5e7eb]Rate Budget Stats[/bold #e5e7eb]",
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
-        border_style="#3a3d4a",
+        header_style=f"bold {C_TEXT}",
+        border_style=C_BORDER,
         title_style="",
         row_styles=["", "on #1e2029"],
     )
@@ -2274,8 +2282,8 @@ def preset_list() -> None:
     table = Table(
         title="[bold #e5e7eb]Presets[/bold #e5e7eb]",
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
-        border_style="#3a3d4a",
+        header_style=f"bold {C_TEXT}",
+        border_style=C_BORDER,
         title_style="",
         row_styles=["", "on #1e2029"],
     )
@@ -2412,8 +2420,8 @@ def task_list(
     table = Table(
         title="[bold #e5e7eb]Scan Tasks[/bold #e5e7eb]",
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
-        border_style="#3a3d4a",
+        header_style=f"bold {C_TEXT}",
+        border_style=C_BORDER,
         title_style="",
         row_styles=["", "on #1e2029"],
     )
@@ -2747,8 +2755,8 @@ def task_runs(
     table = Table(
         title="[bold #e5e7eb]Task Run History[/bold #e5e7eb]",
         box=box.SIMPLE_HEAVY,
-        header_style="bold #e5e7eb",
-        border_style="#3a3d4a",
+        header_style=f"bold {C_TEXT}",
+        border_style=C_BORDER,
         title_style="",
         row_styles=["", "on #1e2029"],
     )
