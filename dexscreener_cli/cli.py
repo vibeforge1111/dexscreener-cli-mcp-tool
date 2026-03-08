@@ -34,6 +34,7 @@ from .task_runner import execute_task_once, select_due_tasks
 from .task_runner import task_filters as runner_task_filters
 from .ui import (
     build_header,
+    count_candidate_transitions,
     fmt_holders,
     fmt_pct,
     fmt_usd,
@@ -1487,6 +1488,7 @@ def alpha_drops_watch(
     async def loop() -> None:
         seen: set[tuple[str, str]] = set()
         previous_ranks: dict[tuple[str, str], int] = {}
+        previous_candidates: dict[tuple[str, str], HotTokenCandidate] = {}
         sent_alerts: deque[datetime] = deque()
         cycle = 0
         status_message = "watching for new alpha drops"
@@ -1512,6 +1514,7 @@ def alpha_drops_watch(
 
                 new_events = [c for c in candidates if c.key not in seen]
                 seen.update(c.key for c in candidates)
+                new_count, changed_count = count_candidate_transitions(candidates, previous_candidates)
 
                 if not no_alerts and runtime_task.alerts and new_events:
                     now = datetime.now(UTC)
@@ -1527,13 +1530,21 @@ def alpha_drops_watch(
                         if alert_result.get("sent"):
                             runtime_task.last_alert_at = utc_now_iso()
                             sent_alerts.append(now)
-                            status_message = f"alerts sent for {len(new_events)} new drops"
+                            status_message = (
+                                f"alerts sent for {len(new_events)} new drops | "
+                                f"{new_count} new, {changed_count} changed"
+                            )
                         else:
-                            status_message = f"alerts not sent: {alert_result.get('reason')}"
+                            status_message = (
+                                f"alerts not sent: {alert_result.get('reason')} | "
+                                f"{new_count} new, {changed_count} changed"
+                            )
                 elif new_events:
-                    status_message = f"{len(new_events)} new alpha drops detected (alerts disabled)"
+                    status_message = f"{len(new_events)} new alpha drops | {changed_count} changed (alerts disabled)"
                 else:
-                    status_message = "no new alpha drops this cycle"
+                    status_message = (
+                        f"stable board | {changed_count} changed" if changed_count else "no new alpha drops this cycle"
+                    )
 
                 view = Group(
                     build_header(),
@@ -1542,6 +1553,7 @@ def alpha_drops_watch(
                         chain=",".join(scan_chains),
                         max_age_hours=max_age_hours,
                         limit=limit,
+                        previous_candidates=previous_candidates,
                     ),
                     Columns([render_chain_heat_table(candidates), render_flow_panel(candidates)]),
                     render_rank_movers_table(
@@ -1561,6 +1573,7 @@ def alpha_drops_watch(
                 )
                 live.update(view)
                 previous_ranks = {candidate.key: idx for idx, candidate in enumerate(candidates, start=1)}
+                previous_candidates = {candidate.key: candidate for candidate in candidates}
                 if cycles > 0 and cycle >= cycles:
                     return
                 await asyncio.sleep(interval)
@@ -1703,6 +1716,7 @@ def new_runners_watch(
         async with DexScreenerClient() as client:
             scanner = HotScanner(client)
             previous_ranks: dict[tuple[str, str], int] = {}
+            previous_candidates: dict[tuple[str, str], HotTokenCandidate] = {}
             controller = WatchKeyboardController(
                 chains=chain_pool,
                 sort_modes=NEW_RUNNER_SORT_MODES,
@@ -1742,6 +1756,7 @@ def new_runners_watch(
                         limit=limit,
                     )
                     controller.clamp_selection(row_count=len(ranked))
+                    new_count, changed_count = count_candidate_transitions(ranked, previous_candidates)
 
                     if action and action["type"] == "copy":
                         if ranked:
@@ -1760,6 +1775,11 @@ def new_runners_watch(
                             )
                         else:
                             status_message = "nothing to copy (no ranked rows)"
+                    elif not action:
+                        if new_count or changed_count:
+                            status_message = f"{new_count} new | {changed_count} changed"
+                        else:
+                            status_message = "stable board"
 
                     view = Group(
                         build_header(),
@@ -1774,13 +1794,14 @@ def new_runners_watch(
                                 render_flow_panel(ranked),
                             ]
                         ),
-                        render_top_runner_cards(ranked, pulse=(cycle % 2 == 0)),
+                        render_top_runner_cards(ranked, pulse=(cycle % 2 == 0 and (new_count > 0 or changed_count > 0))),
                         render_new_runners_table(
                             ranked,
                             chain=active_chain,
                             max_age_hours=max_age_hours,
                             limit=limit,
                             selected_index=controller.selected_index,
+                            previous_candidates=previous_candidates,
                         ),
                         render_rank_movers_table(
                             ranked,
@@ -1800,6 +1821,7 @@ def new_runners_watch(
                     )
                     live.update(view)
                     previous_ranks = {candidate.key: idx for idx, candidate in enumerate(ranked, start=1)}
+                    previous_candidates = {candidate.key: candidate for candidate in ranked}
                     if cycles > 0 and cycle >= cycles:
                         return
                     await asyncio.sleep(interval)
@@ -1835,9 +1857,13 @@ def watch(
     async def loop() -> None:
         async with DexScreenerClient() as client:
             scanner = HotScanner(client)
+            previous_candidates: dict[tuple[str, str], HotTokenCandidate] = {}
+            cycle = 0
             with Live(console=console, screen=True, refresh_per_second=6) as live:
                 while True:
+                    cycle += 1
                     candidates = await scanner.scan(filters)
+                    new_count, changed_count = count_candidate_transitions(candidates, previous_candidates)
                     view = Group(
                         build_header(),
                         render_scan_summary(candidates),
@@ -1848,13 +1874,18 @@ def watch(
                             min_liquidity_usd=filters.min_liquidity_usd,
                             min_volume_h24_usd=filters.min_volume_h24_usd,
                             min_txns_h1=filters.min_txns_h1,
+                            previous_candidates=previous_candidates,
                         ),
                         render_status_footer(
                             interval=interval,
                             chains=filters.chains,
+                            cycle=cycle,
+                            new_count=new_count,
+                            changed_count=changed_count,
                         ),
                     )
                     live.update(view)
+                    previous_candidates = {candidate.key: candidate for candidate in candidates}
                     await asyncio.sleep(interval)
 
     try:

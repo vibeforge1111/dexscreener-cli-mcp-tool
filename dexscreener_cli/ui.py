@@ -173,6 +173,109 @@ def holders_text(value: int | None) -> Text:
     return Text(fmt_holders(value), style=C_RED)
 
 
+def _direction_style(delta: float) -> str:
+    if delta > 0:
+        return f"bold {C_GREEN}"
+    if delta < 0:
+        return f"bold {C_RED}"
+    return C_LABEL
+
+
+def _transition_text(previous: str, current: str, *, current_style: str, delta: float) -> Text:
+    txt = Text()
+    txt.append(previous, style=C_DIM)
+    txt.append(" -> ", style=_direction_style(delta))
+    txt.append(current, style=current_style)
+    return txt
+
+
+def _momentum_label(value: float) -> str:
+    if value > 0:
+        return _safe_text(f"{ARROW_UP} {fmt_pct(value)}")
+    if value < 0:
+        return _safe_text(f"{ARROW_DOWN} {fmt_pct(value)}")
+    return f"  {fmt_pct(value)}"
+
+
+def _score_cell(score: float, previous_score: float | None = None, *, compact: bool = False) -> Text:
+    label = f"{score:.0f}"
+    style = _score_style(score)
+    if previous_score is not None and f"{previous_score:.0f}" != label:
+        return _transition_text(f"{previous_score:.0f}", label, current_style=style, delta=score - previous_score)
+    if compact:
+        return Text(label, style=style)
+    return _score_gauge(score)
+
+
+def _momentum_cell(value: float, previous_value: float | None = None) -> Text:
+    if previous_value is not None:
+        previous_label = _momentum_label(previous_value)
+        current_label = _momentum_label(value)
+        if previous_label != current_label:
+            return _transition_text(previous_label, current_label, current_style=_pct_style(value), delta=value - previous_value)
+    return _momentum_text(value)
+
+
+def _volume_cell(value: float, previous_value: float | None = None) -> Text:
+    current_label = fmt_usd(value)
+    current_style = _vol_style(value)
+    if previous_value is not None:
+        previous_label = fmt_usd(previous_value)
+        if previous_label != current_label:
+            return _transition_text(previous_label, current_label, current_style=current_style, delta=value - previous_value)
+    return _vol_heat(value)
+
+
+def _count_cell(value: int, previous_value: int | None = None, *, style: str = C_TEXT) -> Text:
+    current_label = str(value)
+    if previous_value is not None and previous_value != value:
+        return _transition_text(str(previous_value), current_label, current_style=style, delta=float(value - previous_value))
+    return Text(current_label, style=style)
+
+
+def _visible_candidate_changed(current: HotTokenCandidate, previous: HotTokenCandidate | None) -> bool:
+    if previous is None:
+        return True
+    return any(
+        (
+            f"{previous.score:.0f}" != f"{current.score:.0f}",
+            _momentum_label(previous.pair.price_change_h1) != _momentum_label(current.pair.price_change_h1),
+            fmt_usd(previous.pair.volume_h24) != fmt_usd(current.pair.volume_h24),
+            previous.pair.txns_h1 != current.pair.txns_h1,
+            fmt_usd(previous.pair.liquidity_usd) != fmt_usd(current.pair.liquidity_usd),
+            fmt_holders(previous.pair.holders_count) != fmt_holders(current.pair.holders_count),
+            f"{previous.analytics.breakout_readiness:.0f}" != f"{current.analytics.breakout_readiness:.0f}",
+            f"{previous.analytics.relative_strength:+.1f}" != f"{current.analytics.relative_strength:+.1f}",
+        )
+    )
+
+
+def count_candidate_transitions(
+    candidates: list[HotTokenCandidate],
+    previous_candidates: dict[tuple[str, str], HotTokenCandidate] | None,
+) -> tuple[int, int]:
+    if not previous_candidates:
+        return (len(candidates), 0)
+    new_count = 0
+    changed_count = 0
+    for candidate in candidates:
+        previous = previous_candidates.get(candidate.key)
+        if previous is None:
+            new_count += 1
+            continue
+        if _visible_candidate_changed(candidate, previous):
+            changed_count += 1
+    return new_count, changed_count
+
+
+def _row_live_style(current: HotTokenCandidate, previous: HotTokenCandidate | None) -> str | None:
+    if previous is None:
+        return "on #132536"
+    if _visible_candidate_changed(current, previous):
+        return "on #18271f"
+    return None
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Visual gauges & meters
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -234,6 +337,16 @@ def _vol_heat(value: float, *, mini_bar: bool = False) -> Text:
         txt.append(" ", style="")
     txt.append(fmt_usd(value), style=style)
     return txt
+
+
+def _vol_style(value: float) -> str:
+    if value >= 10_000_000:
+        return f"bold {C_WHITE}"
+    if value >= 1_000_000:
+        return C_TEXT
+    if value >= 100_000:
+        return C_LABEL
+    return C_DIM
 
 
 def _age_badge(hours: float | None) -> Text:
@@ -541,6 +654,9 @@ def render_status_footer(
     interval: float | None = None,
     chains: tuple[str, ...] = (),
     profile: str = "",
+    cycle: int | None = None,
+    new_count: int = 0,
+    changed_count: int = 0,
 ) -> Panel:
     """Styled status footer with scan metadata."""
     now = datetime.now(UTC).strftime("%H:%M:%S")
@@ -559,6 +675,17 @@ def render_status_footer(
     # Center: timestamp
     txt.append(_safe_text(f"  {VLINE}  "), style=C_BORDER)
     txt.append(now, style=C_DIM)
+    if cycle is not None:
+        txt.append(_safe_text(f"  {VLINE}  "), style=C_BORDER)
+        txt.append(f"cycle {cycle}", style=C_LABEL)
+    if new_count or changed_count:
+        txt.append(_safe_text(f"  {VLINE}  "), style=C_BORDER)
+        if new_count:
+            txt.append(f"{new_count} new", style=f"bold {C_CYAN}")
+        if new_count and changed_count:
+            txt.append(_safe_text("  +  "), style=C_BORDER)
+        if changed_count:
+            txt.append(f"{changed_count} changed", style=f"bold {C_GREEN}")
 
     # Right: interval or static
     txt.append(_safe_text(f"  {VLINE}  "), style=C_BORDER)
@@ -590,6 +717,7 @@ def render_hot_table(
     min_liquidity_usd: float,
     min_volume_h24_usd: float,
     min_txns_h1: int,
+    previous_candidates: dict[tuple[str, str], HotTokenCandidate] | None = None,
 ) -> Table:
     compact_level = _compact_level()
     compact = compact_level >= 1
@@ -633,19 +761,11 @@ def render_hot_table(
 
     for i, candidate in enumerate(candidates, start=1):
         p = candidate.pair
-        h1 = _momentum_text(p.price_change_h1)
-        h24 = _momentum_text(p.price_change_h24)
-
-        # Score as plain colored number
-        sc = candidate.score
-        if sc >= 80:
-            score_text = Text(f"{sc:.0f}", style=f"bold {C_GREEN_BRIGHT}")
-        elif sc >= 65:
-            score_text = Text(f"{sc:.0f}", style=f"bold {C_GOLD}")
-        elif sc >= 50:
-            score_text = Text(f"{sc:.0f}", style=C_TEXT)
-        else:
-            score_text = Text(f"{sc:.0f}", style=C_DIM)
+        previous = previous_candidates.get(candidate.key) if previous_candidates else None
+        h1 = _momentum_cell(p.price_change_h1, previous.pair.price_change_h1 if previous else None)
+        h24 = _momentum_cell(p.price_change_h24, previous.pair.price_change_h24 if previous else None)
+        score_text = _score_cell(candidate.score, previous.score if previous else None, compact=True)
+        row_style = _row_live_style(candidate, previous)
 
         if compact:
             table.add_row(
@@ -655,11 +775,12 @@ def render_hot_table(
                 score_text,
                 h1,
                 h24,
-                fmt_usd(p.volume_h24),
-                str(p.txns_h1),
+                _volume_cell(p.volume_h24, previous.pair.volume_h24 if previous else None),
+                _count_cell(p.txns_h1, previous.pair.txns_h1 if previous else None),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
                 _age_badge(p.age_hours),
+                style=row_style,
             )
         else:
             table.add_row(
@@ -669,12 +790,13 @@ def render_hot_table(
                 score_text,
                 h1,
                 h24,
-                fmt_usd(p.volume_h24),
-                str(p.txns_h1),
+                _volume_cell(p.volume_h24, previous.pair.volume_h24 if previous else None),
+                _count_cell(p.txns_h1, previous.pair.txns_h1 if previous else None),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
                 _age_badge(p.age_hours),
                 fmt_usd(p.market_cap if p.market_cap > 0 else p.fdv),
+                style=row_style,
             )
 
     if not candidates:
@@ -756,6 +878,7 @@ def render_new_runners_table(
     max_age_hours: float,
     limit: int,
     selected_index: int | None = None,
+    previous_candidates: dict[tuple[str, str], HotTokenCandidate] | None = None,
 ) -> Table:
     compact_level = _compact_level()
     show_chain = len({c.pair.chain_id for c in candidates}) > 1
@@ -803,9 +926,9 @@ def render_new_runners_table(
     for i, candidate in enumerate(candidates[:limit], start=1):
         p = candidate.pair
         a = candidate.analytics
+        previous = previous_candidates.get(candidate.key) if previous_candidates else None
         is_selected = selected_index is not None and (i - 1) == selected_index
         token_style = f"bold black on {C_GREEN}" if is_selected else f"bold {C_GOLD}"
-        score_style_sel = f"bold black on {C_GREEN}" if is_selected else _score_style(candidate.score)
 
         rs_style = (
             f"bold {C_GREEN}" if a.relative_strength >= 8
@@ -822,20 +945,28 @@ def render_new_runners_table(
         if show_chain:
             row.append(_chain_text(p.chain_id))
         row.append(Text(_safe_text(p.base_symbol), style=token_style))
+        row_style = None if is_selected else _row_live_style(candidate, previous)
 
         if compact_level == 0:
-            if is_selected:
-                score_txt = Text(f"{candidate.score:.1f}", style=score_style_sel)
-            else:
-                score_txt = _score_gauge(candidate.score)
+            score_txt = _score_cell(candidate.score, previous.score if previous else None, compact=is_selected)
             row.extend([
                 score_txt,
-                Text(f"{a.breakout_readiness:.0f}", style=readiness_style),
-                Text(f"{a.relative_strength:+.1f}", style=rs_style),
+                _count_cell(
+                    int(round(a.breakout_readiness)),
+                    int(round(previous.analytics.breakout_readiness)) if previous else None,
+                    style=readiness_style,
+                ),
+                _transition_text(
+                    f"{previous.analytics.relative_strength:+.1f}",
+                    f"{a.relative_strength:+.1f}",
+                    current_style=rs_style,
+                    delta=a.relative_strength - previous.analytics.relative_strength,
+                ) if previous and f"{previous.analytics.relative_strength:+.1f}" != f"{a.relative_strength:+.1f}"
+                else Text(f"{a.relative_strength:+.1f}", style=rs_style),
                 _age_badge(p.age_hours),
-                _momentum_text(p.price_change_h1),
-                _vol_heat(p.volume_h24),
-                str(p.txns_h1),
+                _momentum_cell(p.price_change_h1, previous.pair.price_change_h1 if previous else None),
+                _volume_cell(p.volume_h24, previous.pair.volume_h24 if previous else None),
+                _count_cell(p.txns_h1, previous.pair.txns_h1 if previous else None),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
                 _pulse_meter(p),
@@ -844,21 +975,21 @@ def render_new_runners_table(
         elif compact_level == 1:
             row.extend([
                 _age_badge(p.age_hours),
-                _momentum_text(p.price_change_h1),
-                _vol_heat(p.volume_h24),
-                str(p.txns_h1),
+                _momentum_cell(p.price_change_h1, previous.pair.price_change_h1 if previous else None),
+                _volume_cell(p.volume_h24, previous.pair.volume_h24 if previous else None),
+                _count_cell(p.txns_h1, previous.pair.txns_h1 if previous else None),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
             ])
         else:
             row.extend([
-                _momentum_text(p.price_change_h1),
-                _vol_heat(p.volume_h24),
-                str(p.txns_h1),
+                _momentum_cell(p.price_change_h1, previous.pair.price_change_h1 if previous else None),
+                _volume_cell(p.volume_h24, previous.pair.volume_h24 if previous else None),
+                _count_cell(p.txns_h1, previous.pair.txns_h1 if previous else None),
                 fmt_usd(p.liquidity_usd),
                 holders_text(p.holders_count),
             ])
-        table.add_row(*row)
+        table.add_row(*row, style=row_style)
 
     if not candidates:
         fallback = ["-"] * len(table.columns)
