@@ -15,6 +15,12 @@ Think of it this way:
 - **MCP** = lets an AI agent call the scanner and guide you in natural language
 - **Skill** = teaches the agent how to use the MCP and when to send you back to the CLI
 
+## Choose Your Path
+
+- Use the **CLI** if you want the best live experience and the realtime dashboards.
+- Use **MCP** if you want Claude, Codex, OpenClaw, or another agent to operate the scanner in natural language.
+- Use **SKILL.md** if you want the agent to be better at mapping plain English to the right CLI and MCP flows.
+
 **Free APIs used:**
 - [Dexscreener API](https://docs.dexscreener.com/) - token data, pairs, profiles, boosts
 - [GeckoTerminal API](https://www.geckoterminal.com/) - trending pools, new tokens
@@ -98,6 +104,18 @@ cd /path/to/dexscreener-cli-mcp-tool
 If you already activated the environment with `source .venv/bin/activate`, you can use the shorter `ds ...` form instead.
 
 `ds setup` is important on a fresh install. It creates your local default preset so scans feel sensible immediately.
+
+## After Install, Run This
+
+If you only run one command after setup, make it this:
+
+```cmd
+.\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+```
+
+```bash
+./.venv/bin/ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+```
 
 ### Common Windows mistake
 
@@ -726,8 +744,11 @@ ds task configure my-bot --webhook-url https://your-server.com/hook
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MORALIS_API_KEY` | No | Enables Moralis holder data (free tier: 40K req/month) |
+| `DS_CACHE_TTL_SECONDS` | No | Override the default Dex cache TTL (default: `10`) |
 | `DS_TABLE_MODE` | No | Set to `compact` for narrow terminals |
 | `DS_TABLE_WIDTH` | No | Override auto-detected terminal width |
+
+For disclosure and reporting guidance, see [SECURITY.md](SECURITY.md).
 
 ---
 

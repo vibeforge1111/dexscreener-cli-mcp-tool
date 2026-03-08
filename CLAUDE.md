@@ -2,18 +2,28 @@
 
 ## What This Is
 
-An **unofficial** CLI scanner, MCP server, and AI skill for Dexscreener token signals. Not affiliated with or endorsed by Dexscreener. All APIs used are free and public - no keys required to get started. Scores tokens 0-100 based on volume, liquidity, momentum, and flow pressure across Solana, Base, Ethereum, BSC, and Arbitrum.
+An **unofficial** CLI scanner, MCP server, and AI skill for Dexscreener token signals. Not affiliated with or endorsed by Dexscreener. The CLI is the primary product and the best live experience. MCP and `SKILL.md` exist to help agents guide users and operate the scanner in natural language.
+
+All APIs used are free and public. The scanner scores tokens 0-100 based on volume, liquidity, momentum, and flow pressure across the main supported chains.
 
 ## Quick Commands
 
 ```bash
-ds setup                           # First-run calibration wizard
-ds hot --chains solana --limit 10  # Scan hot tokens
-ds watch --interval 7              # Live dashboard
-ds search pepe                     # Search tokens
-ds doctor                          # Diagnose setup issues
-ds update                          # Pull latest and reinstall
-dexscreener-mcp                    # Start MCP server
+ds quickstart --shell bash --goal live
+ds doctor
+ds hot --chains solana,base --limit 10
+ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+./.venv/bin/dexscreener-mcp
+```
+
+Windows `cmd.exe` equivalents:
+
+```cmd
+.\.venv\Scripts\ds.exe quickstart --shell cmd --goal live
+.\.venv\Scripts\ds.exe doctor
+.\.venv\Scripts\ds.exe hot --chains=solana,base --limit=10
+.\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
+.\.venv\Scripts\dexscreener-mcp.exe
 ```
 
 ## Project Structure
@@ -42,7 +52,10 @@ dexscreener_cli/
 - **Scan profiles**: strict/balanced/discovery baselines in cli.py with chain multipliers
 - **UI separation**: Only cli.py imports from ui.py. All rendering in ui.py.
 - **MCP server**: Mirrors CLI functionality via FastMCP tools in mcp_server.py
+- **Quickstart surfaces**: use `ds quickstart`, `get_cli_quickstart`, `cli_quickstart_guide`, and `dexscreener://cli-guide`
 - **State**: JSON files in ~/.dexscreener-cli/ (presets.json, tasks.json, runs.json)
+- **Live mode**: polling live public APIs, not websocket streaming
+- **Cache default**: Dex cache TTL defaults to 10 seconds and can be overridden with `DS_CACHE_TTL_SECONDS`
 
 ## UI Style Rules (read docs/UI_UX_SPEC.md for full guide)
 
@@ -56,9 +69,9 @@ dexscreener_cli/
 ## Testing
 
 ```bash
-ds hot --chains solana --limit 5    # Quick scan test
-ds doctor                           # Health check
-python -m dexscreener_cli hot --json  # JSON output test
+./.venv/bin/ds doctor
+./.venv/bin/ds hot --chains=solana,base --limit=5
+./.venv/bin/ds quickstart --shell bash --goal live
 ```
 
 ## Dependencies
