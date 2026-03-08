@@ -44,6 +44,15 @@ dexscreener_cli/
 - **MCP server**: Mirrors CLI functionality via FastMCP tools in mcp_server.py
 - **State**: JSON files in ~/.dexscreener-cli/ (presets.json, tasks.json, runs.json)
 
+## UI Style Rules (read docs/UI_UX_SPEC.md for full guide)
+
+- **All visual code in ui.py** - cli.py only imports, never hardcodes colors or Unicode
+- **Tables**: `box.SIMPLE_HEAVY`, `row_styles=["", f"on {C_ROW_ALT}"]`, `border_style=C_BORDER`
+- **Panels**: `box.HEAVY`, `border_style=C_BORDER`
+- **Row alternation**: black / `C_ROW_ALT` (`#1e2029`). Never override with per-row `style=` in one-shot scans
+- **Use ui.py helpers**: `_rank_badge()`, `_momentum_text()`, `_age_badge()`, `_vol_heat()`, etc.
+- **Wrap Unicode** in `_safe_text()`
+
 ## Testing
 
 ```bash
