@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +21,64 @@ SCAN_PROFILE_BASELINES: dict[str, dict[str, float]] = {
     "balanced": {"min_liquidity_usd": 20_000.0, "min_volume_h24_usd": 40_000.0, "min_txns_h1": 25.0},
     "discovery": {"min_liquidity_usd": 8_000.0, "min_volume_h24_usd": 10_000.0, "min_txns_h1": 5.0},
 }
+
+_QUICKSTART_PLATFORMS: tuple[str, ...] = ("windows-cmd", "windows-powershell", "mac-linux")
+_QUICKSTART_GOALS: tuple[str, ...] = ("live", "hot", "mcp", "all")
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _quickstart_platform(platform: str) -> str:
+    normalized = platform.strip().lower()
+    return normalized if normalized in _QUICKSTART_PLATFORMS else "windows-cmd"
+
+
+def _quickstart_goal(goal: str) -> str:
+    normalized = goal.strip().lower()
+    return normalized if normalized in _QUICKSTART_GOALS else "live"
+
+
+def _quickstart_paths(platform: str) -> tuple[str, str]:
+    root = _repo_root()
+    if platform == "mac-linux":
+        return (str(root / ".venv" / "bin" / "ds"), str(root / ".venv" / "bin" / "dexscreener-mcp"))
+    return (str(root / ".venv" / "Scripts" / "ds.exe"), str(root / ".venv" / "Scripts" / "dexscreener-mcp.exe"))
+
+
+def _quickstart_cd(platform: str) -> str:
+    root = str(_repo_root())
+    if platform == "windows-cmd":
+        return f"cd /d {root}"
+    return f"cd {root}"
+
+
+def _quickstart_prefix(platform: str) -> str:
+    if platform == "windows-cmd":
+        return r".\.venv\Scripts\ds.exe"
+    if platform == "windows-powershell":
+        return r".\.venv\Scripts\ds.exe"
+    return "ds"
+
+
+def _quickstart_commands(platform: str, goal: str) -> list[str]:
+    selected_platform = _quickstart_platform(platform)
+    selected_goal = _quickstart_goal(goal)
+    prefix = _quickstart_prefix(selected_platform)
+    _cli_path, mcp_path = _quickstart_paths(selected_platform)
+    live = (
+        f"{prefix} new-runners-watch --chain=solana --watch-chains=solana,base "
+        "--profile=discovery --max-age-hours=48 --include-unknown-age --interval=2"
+    )
+    hot = f"{prefix} hot --chains=solana,base --limit=10"
+    if selected_goal == "hot":
+        return [_quickstart_cd(selected_platform), f"{prefix} doctor", hot]
+    if selected_goal == "mcp":
+        return [_quickstart_cd(selected_platform), f"{prefix} doctor", mcp_path]
+    if selected_goal == "all":
+        return [_quickstart_cd(selected_platform), f"{prefix} doctor", f"{prefix} setup", hot, live]
+    return [_quickstart_cd(selected_platform), f"{prefix} doctor", live]
 
 
 def _serialize_candidate(candidate: HotTokenCandidate) -> dict[str, Any]:
@@ -682,6 +741,45 @@ async def inspect_token(chain_id: str, token_address: str) -> dict[str, Any]:
         }
 
 
+@mcp.tool()
+async def get_cli_quickstart(
+    platform: str = "windows-cmd",
+    goal: str = "live",
+) -> dict[str, Any]:
+    """Return exact CLI commands for a user's platform and goal.
+
+    Use this when a user asks "how do I run this?", "give me copy-paste commands",
+    "what should I run on Windows?", or "how do I start the live terminal?".
+
+    Platforms:
+    - windows-cmd
+    - windows-powershell
+    - mac-linux
+
+    Goals:
+    - live
+    - hot
+    - mcp
+    - all
+    """
+    selected_platform = _quickstart_platform(platform)
+    selected_goal = _quickstart_goal(goal)
+    cli_path, mcp_path = _quickstart_paths(selected_platform)
+    return {
+        "platform": selected_platform,
+        "goal": selected_goal,
+        "repoRoot": str(_repo_root()),
+        "cliPath": cli_path,
+        "mcpPath": mcp_path,
+        "commands": _quickstart_commands(selected_platform, selected_goal),
+        "notes": [
+            "Prefer --flag=value style on Windows for copy-paste safety.",
+            "Live boards are CLI-only and use live API polling, not websocket streaming.",
+            "The current default Dex cache TTL is 10 seconds and can be overridden with DS_CACHE_TTL_SECONDS.",
+        ],
+    }
+
+
 @mcp.resource("dexscreener://profiles", name="profiles", description="Recommended scan profiles.")
 async def resource_profiles() -> dict[str, Any]:
     return {"profiles": SCAN_PROFILE_BASELINES, "names": list(SCAN_PROFILE_NAMES)}
@@ -744,6 +842,28 @@ def prompt_runner_triage(
         "2) failure mode to watch,\n"
         "3) invalidation trigger,\n"
         "4) whether to alert now or wait one cycle."
+    )
+
+
+@mcp.prompt("cli_quickstart_guide")
+def prompt_cli_quickstart_guide(
+    platform: str = "windows-cmd",
+    goal: str = "live",
+) -> str:
+    selected_platform = _quickstart_platform(platform)
+    selected_goal = _quickstart_goal(goal)
+    commands = "\n".join(f"- {command}" for command in _quickstart_commands(selected_platform, selected_goal))
+    return (
+        "Give a zero-assumption quickstart for dexscreener-cli-mcp-tool.\n"
+        f"Platform: {selected_platform}\n"
+        f"Goal: {selected_goal}\n"
+        "Return:\n"
+        "1) which terminal/app to open first,\n"
+        "2) exact copy-paste commands,\n"
+        "3) one common mistake to avoid,\n"
+        "4) what the user should expect to see.\n"
+        "Commands:\n"
+        f"{commands}"
     )
 
 

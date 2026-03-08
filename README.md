@@ -134,6 +134,13 @@ cd /d C:\path\to\dexscreener-cli-mcp-tool
 .\.venv\Scripts\ds.exe new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2
 ```
 
+Or ask the CLI to print the exact commands for you:
+
+```cmd
+cd /d C:\path\to\dexscreener-cli-mcp-tool
+.\.venv\Scripts\ds.exe quickstart --shell cmd --goal live
+```
+
 If you want a shorter non-live test first:
 
 ```cmd
@@ -240,6 +247,7 @@ The 3 built-in profiles (strict / balanced / discovery) are always available. Yo
 | Command | What it does |
 |---------|-------------|
 | `ds setup` | Interactive wizard - builds a "default" profile from 5 questions |
+| `ds quickstart` | Print exact copy-paste commands for live scans, hot scans, or MCP setup |
 | `ds doctor` | Diagnose issues and verify your setup |
 | `ds update` | Pull latest code and reinstall |
 | `ds profiles` | Show built-in filter thresholds per chain |
@@ -482,7 +490,7 @@ Once connected, just ask in plain English:
 
 The agent figures out which MCP tool to call and what parameters to use. You don't need to know the tool names.
 
-### All 14 MCP tools
+### All 15 MCP tools
 
 For reference, these are the tools the agent has access to:
 
@@ -502,8 +510,9 @@ For reference, these are the tools the agent has access to:
 | `export_state_bundle` | Export all config as JSON |
 | `import_state_bundle` | Import a config bundle |
 | `get_rate_budget_stats` | Check API rate limits and usage |
+| `get_cli_quickstart` | Return exact copy-paste CLI commands for Windows/macOS/Linux and live/MCP goals |
 
-Plus 3 resources (`dexscreener://profiles`, `dexscreener://presets`, `dexscreener://tasks`) and 2 prompts (`alpha_scan_plan`, `runner_triage`).
+Plus 3 resources (`dexscreener://profiles`, `dexscreener://presets`, `dexscreener://tasks`) and 3 prompts (`alpha_scan_plan`, `runner_triage`, `cli_quickstart_guide`).
 
 ---
 

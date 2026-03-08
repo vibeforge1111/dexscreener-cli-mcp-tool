@@ -59,6 +59,7 @@ Use this skill when the user mentions any of:
 | `export_state_bundle` | User wants to backup all presets, tasks, and run history as JSON |
 | `import_state_bundle` | User wants to restore a config backup (mode: "merge" or "replace") |
 | `get_rate_budget_stats` | User asks about API health, rate limits, or remaining budget |
+| `get_cli_quickstart` | User asks how to run the CLI/MCP on Windows, PowerShell, or Mac/Linux and needs exact copy-paste commands |
 
 ### MCP Resources (read-only context)
 
@@ -74,6 +75,7 @@ Use this skill when the user mentions any of:
 |--------|----------|
 | `alpha_scan_plan` | User wants a structured scan strategy with CLI commands, alert setup, and fallback plans |
 | `runner_triage` | User wants to evaluate a specific token candidate for momentum trading (A/B/C verdict) |
+| `cli_quickstart_guide` | User wants a no-assumptions setup walkthrough for their platform with exact commands |
 
 ## CLI Commands (for terminal users)
 
@@ -136,6 +138,7 @@ ds watch --preset my-degen
 ### Setup & Maintenance
 ```bash
 ds setup        # 5-question calibration wizard
+ds quickstart   # Print exact copy-paste commands for live/hot/MCP setup
 ds doctor       # Diagnose issues (checks Python, packages, API, env vars, git)
 ds update       # Pull latest code and reinstall
 ds profiles     # Show built-in profile thresholds per chain
@@ -185,6 +188,8 @@ When the user says... use this approach:
 | "Show scan history" | `list_task_runs()` |
 | "Backup my config" | `export_state_bundle()` |
 | "Check API health" | `get_rate_budget_stats()` |
+| "How do I run this on Windows?" | `get_cli_quickstart(platform="windows-cmd", goal="live")` |
+| "Give me copy-paste commands" | `get_cli_quickstart(platform="windows-cmd", goal="live")` |
 | "What chains can I scan?" | Answer: solana, base, ethereum, bsc, arbitrum |
 | "Watch live" / "real-time feed" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
 | "Live new launches" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
@@ -297,6 +302,12 @@ When creating tasks with alerts, these parameters are available:
 3. If a live board is sparse, widen it with `--profile=discovery --max-age-hours=48 --include-unknown-age`
 4. Live modes are CLI-only - MCP agents use tasks/alerts for ongoing monitoring
 
+### When user needs setup help:
+1. If they want exact commands, use `get_cli_quickstart`
+2. If they want a natural-language walkthrough, use `cli_quickstart_guide`
+3. For CLI users already in the terminal, suggest `ds quickstart --shell cmd --goal live` on Windows or `ds quickstart --shell bash --goal live` on Mac/Linux
+4. Prefer `--flag=value` examples on Windows
+
 ## Error Handling
 
 | Error | Response |
@@ -304,6 +315,7 @@ When creating tasks with alerts, these parameters are available:
 | No tokens found | Suggest lowering filters: use discovery profile values (min_liquidity_usd=8000, min_txns_h1=5) |
 | CLI says `Option '--profile' requires an argument` | User pressed Enter too early. Tell them to run `--profile=discovery` on the same line |
 | Windows user says `ds` is not recognized | Tell them to run `.\.venv\Scripts\ds.exe` from the repo root or activate the virtual environment |
+| User does not know which terminal to open | Tell Windows users to open `Command Prompt` first; use `get_cli_quickstart(platform="windows-cmd", goal="live")` |
 | Token not found in search | Try alternate name/symbol, or ask for the contract address |
 | API rate limited | Wait a moment and retry, or check `get_rate_budget_stats` |
 | Missing chain support | List supported chains: solana, base, ethereum, bsc, arbitrum |

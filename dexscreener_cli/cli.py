@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 from collections import deque
@@ -33,10 +34,28 @@ from .state import ScanPreset, ScanTask, StateStore, utc_now_iso
 from .task_runner import execute_task_once, select_due_tasks
 from .task_runner import task_filters as runner_task_filters
 from .ui import (
+    C_BORDER,
+    C_BORDER_DIM,
+    C_DIM,
+    C_GOLD,
+    C_GREEN,
+    C_LABEL,
+    C_RED,
+    C_TEXT,
+    C_WHITE,
+    CHAIN_LABEL,
+    DIAMOND,
+    _age_badge,
+    _compact_level,
+    _momentum_text,
+    _rank_badge,
+    _safe_text,
+    _vol_heat,
     build_header,
     count_candidate_transitions,
     fmt_holders,
     fmt_pct,
+    fmt_price,
     fmt_usd,
     holders_text,
     render_chain_heat_table,
@@ -169,28 +188,10 @@ def _as_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _pct_text(value: float) -> Text:
-    if value >= 10:
-        return Text(fmt_pct(value), style="bold #4ade80")
-    if value > 0:
-        return Text(fmt_pct(value), style="#4ade80")
-    if value <= -10:
-        return Text(fmt_pct(value), style="bold #f87171")
-    if value < 0:
-        return Text(fmt_pct(value), style="#f87171")
-    return Text(fmt_pct(value), style="#4b5563")
-
-
 def _pct_or_na(value: float, *, txns_h1: int) -> Text:
     if txns_h1 <= 0:
-        return Text("N/A", style="dim")
-    return _pct_text(value)
-
-
-def _terminal_width(default: int = 110) -> int:
-    if not sys.stdout.isatty():
-        return shutil.get_terminal_size((default, 40)).columns
-    return shutil.get_terminal_size((140, 40)).columns
+        return Text("N/A", style=C_DIM)
+    return _momentum_text(value)
 
 
 def _ai_rows_json(rows: list[dict[str, object]]) -> str:
@@ -981,6 +982,97 @@ _SETUP_STYLE_LABELS: dict[str, str] = {
     "3": "conservative",
 }
 
+_QUICKSTART_SHELLS = ("auto", "cmd", "powershell", "bash")
+_QUICKSTART_GOALS = ("live", "hot", "mcp", "all")
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _quickstart_shell(shell: str) -> str:
+    selected = shell.lower().strip()
+    if selected in _QUICKSTART_SHELLS and selected != "auto":
+        return selected
+    if os.name == "nt":
+        return "cmd"
+    return "bash"
+
+
+def _cli_binary(shell: str) -> str:
+    root = _repo_root()
+    if shell in {"cmd", "powershell"}:
+        return str(root / ".venv" / "Scripts" / "ds.exe")
+    return str(root / ".venv" / "bin" / "ds")
+
+
+def _mcp_binary(shell: str) -> str:
+    root = _repo_root()
+    if shell in {"cmd", "powershell"}:
+        return str(root / ".venv" / "Scripts" / "dexscreener-mcp.exe")
+    return str(root / ".venv" / "bin" / "dexscreener-mcp")
+
+
+def _command_prefix(shell: str) -> str:
+    if shell == "cmd":
+        return r".\.venv\Scripts\ds.exe"
+    if shell == "powershell":
+        return r".\.venv\Scripts\ds.exe"
+    return "ds"
+
+
+def _shell_cd_command(shell: str) -> str:
+    repo = str(_repo_root())
+    if shell == "cmd":
+        return f"cd /d {repo}"
+    return f"cd {repo}"
+
+
+def _quickstart_commands(shell: str, goal: str) -> list[str]:
+    prefix = _command_prefix(shell)
+    live = (
+        f"{prefix} new-runners-watch --chain=solana --watch-chains=solana,base "
+        "--profile=discovery --max-age-hours=48 --include-unknown-age --interval=2"
+    )
+    hot = f"{prefix} hot --chains=solana,base --limit=10"
+    if goal == "hot":
+        return [_shell_cd_command(shell), f"{prefix} doctor", hot]
+    if goal == "mcp":
+        return [_shell_cd_command(shell), f"{prefix} doctor", _mcp_binary(shell)]
+    if goal == "all":
+        return [_shell_cd_command(shell), f"{prefix} doctor", f"{prefix} setup", hot, live]
+    return [_shell_cd_command(shell), f"{prefix} doctor", live]
+
+
+def _render_quickstart(shell: str, goal: str) -> None:
+    selected_shell = _quickstart_shell(shell)
+    selected_goal = goal.lower().strip() if goal.lower().strip() in _QUICKSTART_GOALS else "live"
+    commands = _quickstart_commands(selected_shell, selected_goal)
+    title_shell = {"cmd": "Windows CMD", "powershell": "PowerShell", "bash": "Bash"}[selected_shell]
+    title_goal = selected_goal.upper()
+    console.print(build_header())
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]Quickstart[/bold]\n"
+            f"Shell: {title_shell}\n"
+            f"Goal: {title_goal}\n"
+            "Paste the commands below exactly.",
+            border_style="#3a3d4a",
+            box=box.HEAVY,
+            padding=(1, 2),
+        )
+    )
+    typer.echo("")
+    syntax = "cmd" if selected_shell == "cmd" else "powershell" if selected_shell == "powershell" else "bash"
+    typer.echo(f"```{syntax}")
+    for command in commands:
+        typer.echo(command)
+    typer.echo("```")
+    typer.echo("")
+    if selected_shell == "cmd":
+        console.print("[dim]Tip: keep options on one line or use --flag=value style in Command Prompt.[/dim]")
+
 
 @app.command("setup")
 def setup() -> None:
@@ -1112,6 +1204,15 @@ def setup() -> None:
     console.print("[bold #4ade80]Saved![/bold #4ade80] Your config is now the default for all scans.")
     console.print("Run [bold]ds hot[/bold] to start scanning with your settings.")
     console.print("Run [bold]ds setup[/bold] again anytime to recalibrate.\n")
+
+
+@app.command("quickstart")
+def quickstart(
+    shell: Annotated[str, typer.Option(help="auto/cmd/powershell/bash")] = "auto",
+    goal: Annotated[str, typer.Option(help="live/hot/mcp/all")] = "live",
+) -> None:
+    """Print exact copy-paste commands for first-run setup and live usage."""
+    _render_quickstart(shell=shell, goal=goal)
 
 
 # ── Update command ────────────────────────────────────────────────────
