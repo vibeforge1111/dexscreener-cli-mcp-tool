@@ -36,7 +36,7 @@ C_BLUE = "#60a5fa"             # muted blue accent (links, chain)
 C_CYAN = "#67e8f9"             # light cyan (freshness)
 C_PURPLE = "#a78bfa"           # muted purple (signals)
 C_WHITE = "#f9fafb"            # near-white for emphasis
-C_ROW_ALT = "#1e1e1e"          # neutral dark grey for alternating rows
+C_ROW_ALT = "#1e2029"          # dark grey for alternating rows
 
 CHAIN_STYLES = {
     "solana": C_GREEN,
