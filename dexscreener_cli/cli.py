@@ -25,7 +25,7 @@ from rich.text import Text
 
 from .alerts import send_alerts, send_test_alert, validate_webhook_url
 from .client import DexScreenerClient
-from .config import DEFAULT_CHAINS, ScanFilters
+from .config import CACHE_TTL_SECONDS, DEFAULT_CHAINS, ScanFilters
 from .holders import hydrate_pair_holders, hydrate_token_rows_with_holders
 from .models import HotTokenCandidate, PairSnapshot
 from .scanner import HotScanner
@@ -1227,6 +1227,7 @@ def doctor() -> None:
     # 7. State directory
     state_dir = store.base_dir
     checks.append(("State dir", state_dir.exists(), str(state_dir)))
+    checks.append(("Dex cache TTL", True, f"{CACHE_TTL_SECONDS}s (set DS_CACHE_TTL_SECONDS to override)"))
 
     # Render
     table = Table(
@@ -2123,6 +2124,7 @@ def rate_stats(
     penalties = stats.get("bucket_penalty_seconds", {}) if isinstance(stats, dict) else {}
     table.add_row("requests_total", str(stats.get("requests_total", 0)))
     table.add_row("cache_hits", str(stats.get("cache_hits", 0)))
+    table.add_row("cache_ttl_seconds", str(CACHE_TTL_SECONDS))
     table.add_row("retries", str(stats.get("retries", 0)))
     table.add_row("throttled_429", str(stats.get("throttled_429", 0)))
     table.add_row("errors", str(stats.get("errors", 0)))
