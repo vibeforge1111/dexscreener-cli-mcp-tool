@@ -104,9 +104,9 @@ ds hot --json                           # JSON output for scripts
 
 ### Real-Time Live Dashboards
 ```bash
-ds watch --chains solana --interval 5               # Live hot runner board
-ds new-runners-watch --chain solana --interval 2     # Live new runner tracker
-ds alpha-drops-watch --chains solana,base             # Live alpha drops with alerts
+ds watch --chains solana                            # Live hot runner board with the 2s default refresh
+ds new-runners-watch --chain solana --watch-chains solana,base  # Live new runner tracker
+ds alpha-drops-watch --chains solana,base           # Live alpha drops with alerts
 ```
 
 Preferred live command in the current build:
@@ -210,7 +210,7 @@ When the user says... use this approach:
 | "What chains can I scan?" | Answer: solana, base, ethereum, bsc, arbitrum |
 | "Watch live" / "real-time feed" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
 | "Live new launches" | CLI: `ds new-runners-watch --chain=solana --watch-chains=solana,base --profile=discovery --max-age-hours=48 --include-unknown-age --interval=2` |
-| "Alpha drops with Discord alerts" | CLI: `ds alpha-drops-watch --chains solana --discord-webhook-url ...` |
+| "Alpha drops with Discord alerts" | CLI: `ds alpha-drops-watch --chains solana,base --discord-webhook-url ...` |
 | "Check my setup" | CLI: `ds doctor` |
 
 ## Chain Identification

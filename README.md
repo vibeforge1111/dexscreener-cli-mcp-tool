@@ -238,7 +238,7 @@ The simplest live mode. Shows the same hot runner table as `ds hot`, but refresh
 
 ```bash
 ds watch                                        # All chains, refreshes every 2s
-ds watch --chains solana --limit 10 --interval 5  # Solana only, 5s refresh
+ds watch --chains solana --limit 10            # Solana only, keeps the 2s live default
 ds watch --preset my-degen                       # Use your custom profile
 ```
 
@@ -248,7 +248,7 @@ Full-screen dashboard with keyboard controls. Shows new tokens with rank movers,
 
 ```bash
 ds new-runners-watch --chain solana              # Watch Solana runners
-ds new-runners-watch --chain base --interval 2   # Watch Base, 2s refresh
+ds new-runners-watch --chain base --watch-chains base,solana  # Watch Base first, keep chain switching
 ds new-runners-watch --chain solana --watch-chains solana,base,ethereum  # Enable chain switching
 ```
 
@@ -271,7 +271,7 @@ Keyboard shortcuts while running:
 Same as new-runners-watch but focused on breakout-ready tokens. Can send alerts directly to Discord/Telegram as it finds them.
 
 ```bash
-ds alpha-drops-watch --chains solana,base        # Watch for alpha drops
+ds alpha-drops-watch --chains solana,base        # Watch for alpha drops, refreshes every 2s
 ds alpha-drops-watch --chains solana --discord-webhook-url https://discord.com/api/webhooks/YOUR/WEBHOOK  # With Discord alerts
 ds alpha-drops-watch --chains solana --alert-min-score 75 --alert-cooldown-seconds 120  # Alert only high scores, 2min cooldown
 ```
